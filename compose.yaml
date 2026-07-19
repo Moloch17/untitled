@@ -1,0 +1,90 @@
+# The servers are built on the host (cmake --build build) and run here. The
+# build output and data directories are bind-mounted, so binaries and database
+# files stay visible and editable outside the containers.
+#
+#   cmake --build build --target dbserver authserver
+#   docker compose up
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: untitled
+      POSTGRES_USER: untitled
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-untitled}
+    volumes:
+      # Database files land in ./data/postgres on the host. Postgres 18 wants
+      # the mount at /var/lib/postgresql (not .../data) so that pg_upgrade can
+      # work across a version bump without crossing a mount boundary.
+      - ./data/postgres:/var/lib/postgresql
+      # Anything in this directory runs on first initialisation only.
+      - ./server/sql:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Exposed for psql from the host; the services reach it over the compose
+      # network regardless.
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U untitled -d untitled"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  dbserver:
+    build:
+      context: .
+      dockerfile: docker/server.Dockerfile
+    image: untitled-server-runtime
+    command: /srv/bin/dbserver
+    environment:
+      PGHOST: postgres
+      PGDATABASE: untitled
+      PGUSER: untitled
+      PGPASSWORD: ${POSTGRES_PASSWORD:-untitled}
+      DB_SERVER_PORT: "7000"
+    volumes:
+      # Host-built binaries, read-only inside the container.
+      - ./build/bin:/srv/bin:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  authserver:
+    image: untitled-server-runtime
+    command: /srv/bin/authserver
+    environment:
+      AUTH_SERVER_PORT: "7001"
+      DB_SERVER_HOST: dbserver
+      DB_SERVER_PORT: "7000"
+      # Address the *client* should connect to for the world server, which is
+      # the host's published port rather than the compose-internal name.
+      WORLD_PUBLIC_HOST: ${WORLD_PUBLIC_HOST:-127.0.0.1}
+      WORLD_SERVER_PORT: "7002"
+      SESSION_TTL_SECONDS: "120"
+      # Gates the admin account commands. Override in a .env file; if unset,
+      # admin commands are refused outright.
+      ADMIN_SECRET: ${ADMIN_SECRET:-change-me-in-dot-env}
+    volumes:
+      - ./build/bin:/srv/bin:ro
+    ports:
+      - "7001:7001"
+    depends_on:
+      - dbserver
+
+  worldserver:
+    image: untitled-server-runtime
+    command: /srv/bin/worldserver
+    environment:
+      WORLD_SERVER_PORT: "7002"
+      WORLD_UDP_PORT: "7003"
+      DB_SERVER_HOST: dbserver
+      DB_SERVER_PORT: "7000"
+      UDP_TIMEOUT_SECONDS: "30"
+    volumes:
+      - ./build/bin:/srv/bin:ro
+    ports:
+      - "7002:7002"
+      # The tick stream. UDP must be published explicitly -- compose defaults to
+      # TCP, and without /udp the snapshots silently never arrive.
+      - "7003:7003/udp"
+    depends_on:
+      - dbserver

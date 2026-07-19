@@ -1,0 +1,10 @@
+{
+  "name": "untitled",
+  "version-string": "0.1.0",
+  "description": "Game client and dedicated servers",
+  "$comment": "Used on Windows, where there is no system package manager. The Linux build uses distribution packages instead; see README.md.",
+  "dependencies": [
+    "libpq",
+    "libsodium"
+  ]
+}

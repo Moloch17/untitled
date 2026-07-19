@@ -1,0 +1,33 @@
+// Unlit textured quads for the UI overlay. Every UI element -- panels, borders,
+// text -- is a quad sampling the font atlas; solid rectangles sample a white
+// texel in the atlas so the whole interface draws in one pass with one texture.
+material {
+    name : ui,
+    parameters : [
+        {
+            type : sampler2d,
+            name : atlas
+        }
+    ],
+    requires : [
+        uv0,
+        color
+    ],
+    shadingModel : unlit,
+    culling : none,
+    depthCulling : false,
+    depthWrite : false,
+    blending : transparent,
+    featureLevel : 0
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 texel = texture(materialParams_atlas, getUV0());
+        // Vertex colour tints the glyph; the atlas supplies coverage.
+        material.baseColor = getColor() * texel;
+        // The blend mode expects premultiplied alpha.
+        material.baseColor.rgb *= material.baseColor.a;
+    }
+}

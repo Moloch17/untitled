@@ -1,0 +1,32 @@
+// Standard physically-based lit surface. Colour and finish are set per
+// renderable from C++, so one compiled material covers every object in the
+// scene.
+material {
+    name : lit,
+    shadingModel : lit,
+    requires : [ ],
+    parameters : [
+        {
+            type : float3,
+            name : baseColor
+        },
+        {
+            type : float,
+            name : roughness
+        },
+        {
+            type : float,
+            name : metallic
+        }
+    ],
+    culling : back
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor.rgb = materialParams.baseColor;
+        material.roughness = materialParams.roughness;
+        material.metallic = materialParams.metallic;
+    }
+}

@@ -1,0 +1,396 @@
+// Auth server: verifies credentials and hands out short-lived session tokens.
+//
+// It never touches Postgres directly -- account rows come from the database
+// server. Password hashing and token generation happen here so the database
+// server stays a dumb data layer.
+
+#include <chrono>
+#include <csignal>
+#include <thread>
+#include <ctime>
+#include <string>
+#include <vector>
+
+#include <sodium.h>
+
+#include <net/byte_stream.h>
+#include <net/protocol.h>
+#include <serverutil/config.h>
+#include <serverutil/db_client.h>
+#include <serverutil/log.h>
+#include <serverutil/tcp_server.h>
+
+using namespace net;
+using serverutil::Log;
+
+namespace {
+
+volatile std::sig_atomic_t gRunning = 1;
+void onSignal(int) { gRunning = 0; }
+
+const Log log("auth");
+
+constexpr size_t kTokenBytes = 32;
+constexpr size_t kMinPasswordLength = 6;
+constexpr size_t kMaxUsernameLength = 32;
+
+// Random, unguessable, and long enough that brute-forcing is hopeless.
+std::string generateToken() {
+    unsigned char raw[kTokenBytes];
+    randombytes_buf(raw, sizeof raw);
+
+    static const char* hex = "0123456789abcdef";
+    std::string out;
+    out.reserve(kTokenBytes * 2);
+    for (unsigned char byte : raw) {
+        out.push_back(hex[byte >> 4]);
+        out.push_back(hex[byte & 0x0F]);
+    }
+    return out;
+}
+
+// Argon2id with libsodium's interactive parameters: deliberately slow, so a
+// stolen database is expensive to attack offline.
+bool hashPassword(const std::string& password, std::string* out) {
+    char hashed[crypto_pwhash_STRBYTES];
+    if (crypto_pwhash_str(hashed, password.c_str(), password.size(),
+                crypto_pwhash_OPSLIMIT_INTERACTIVE, crypto_pwhash_MEMLIMIT_INTERACTIVE)
+            != 0) {
+        return false;  // out of memory
+    }
+    *out = hashed;
+    return true;
+}
+
+bool verifyPassword(const std::string& hash, const std::string& password) {
+    return crypto_pwhash_str_verify(hash.c_str(), password.c_str(), password.size()) == 0;
+}
+
+bool validUsername(const std::string& username) {
+    if (username.empty() || username.size() > kMaxUsernameLength) {
+        return false;
+    }
+    for (char c : username) {
+        const bool allowed = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!allowed) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void sendLoginResponse(serverutil::TcpServer& server, serverutil::TcpServer::ConnectionId id,
+        AuthResult result, const std::string& token, const std::string& worldHost,
+        uint16_t worldPort, uint64_t accountId) {
+    std::vector<uint8_t> payload;
+    ByteWriter writer(payload);
+    writer.u8(static_cast<uint8_t>(result));
+    writer.string(token);
+    writer.string(worldHost);
+    writer.u16(worldPort);
+    writer.u64(accountId);
+    server.send(id, static_cast<uint16_t>(AuthMessage::LoginResponse), payload);
+}
+
+// Compared without an early exit so timing can't reveal a prefix of the secret.
+bool secretMatches(const std::string& expected, const std::string& supplied) {
+    if (expected.empty()) {
+        return false;  // unset secret disables admin commands entirely
+    }
+    if (expected.size() != supplied.size()) {
+        return false;
+    }
+    unsigned char difference = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        difference |= static_cast<unsigned char>(expected[i] ^ supplied[i]);
+    }
+    return difference == 0;
+}
+
+void sendAdminResponse(serverutil::TcpServer& server, serverutil::TcpServer::ConnectionId id,
+        AuthMessage type, AuthResult result) {
+    std::vector<uint8_t> payload;
+    ByteWriter writer(payload);
+    writer.u8(static_cast<uint8_t>(result));
+    server.send(id, static_cast<uint16_t>(type), payload);
+}
+
+void sendRegisterResponse(serverutil::TcpServer& server, serverutil::TcpServer::ConnectionId id,
+        AuthResult result) {
+    std::vector<uint8_t> payload;
+    ByteWriter writer(payload);
+    writer.u8(static_cast<uint8_t>(result));
+    server.send(id, static_cast<uint16_t>(AuthMessage::RegisterResponse), payload);
+}
+
+}  // namespace
+
+int main() {
+    std::signal(SIGINT, onSignal);
+    std::signal(SIGTERM, onSignal);
+#if !defined(_WIN32)
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
+
+    if (sodium_init() < 0) {
+        log.error("failed to initialise libsodium");
+        return 1;
+    }
+    if (!initSockets()) {
+        log.error("failed to initialise sockets");
+        return 1;
+    }
+
+    const uint16_t listenPort = serverutil::envPort("AUTH_SERVER_PORT", 7001);
+    const std::string dbHost = serverutil::envString("DB_SERVER_HOST", "dbserver");
+    const uint16_t dbPort = serverutil::envPort("DB_SERVER_PORT", 7000);
+    // Handed to the client on success -- the address it should use, which is
+    // not necessarily the one the world server binds inside its container.
+    const std::string worldHost = serverutil::envString("WORLD_PUBLIC_HOST", "127.0.0.1");
+    const uint16_t worldPort = serverutil::envPort("WORLD_SERVER_PORT", 7002);
+    const uint32_t sessionTtl = serverutil::envUint("SESSION_TTL_SECONDS", 120);
+    // Admin commands are refused outright when this is unset.
+    const std::string adminSecret = serverutil::envString("ADMIN_SECRET", "");
+    if (adminSecret.empty()) {
+        log.warn("ADMIN_SECRET is not set; admin commands are disabled");
+    }
+
+    serverutil::DbClient dbClient;
+    for (int attempt = 1; gRunning; ++attempt) {
+        if (dbClient.connect(dbHost, dbPort)) {
+            break;
+        }
+        log.warn("database server connection attempt %d failed", attempt);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    if (!gRunning) {
+        return 0;
+    }
+    log.info("connected to database server at %s:%u", dbHost.c_str(), dbPort);
+
+    serverutil::TcpServer server;
+    if (!server.listen(listenPort)) {
+        log.error("failed to listen on port %u: %s", listenPort, lastSocketError().c_str());
+        return 1;
+    }
+    log.info("listening on port %u", listenPort);
+
+    server.callbacks.onConnect = [](serverutil::TcpServer::ConnectionId id, const Address& peer) {
+        log.info("client connected (conn %llu from %s)", static_cast<unsigned long long>(id),
+                peer.toString().c_str());
+    };
+
+    server.callbacks.onMessage = [&](serverutil::TcpServer::ConnectionId id, uint16_t type,
+                                          const std::vector<uint8_t>& data) {
+        ByteReader reader(data.data(), data.size());
+
+        switch (static_cast<AuthMessage>(type)) {
+            case AuthMessage::LoginRequest: {
+                const uint32_t version = reader.u32();
+                const std::string username = reader.string();
+                const std::string password = reader.string();
+                if (reader.failed()) {
+                    sendLoginResponse(server, id, AuthResult::MalformedRequest, "", "", 0, 0);
+                    return;
+                }
+                if (version != kProtocolVersion) {
+                    log.warn("rejecting client with protocol version %u (expected %u)", version,
+                            kProtocolVersion);
+                    sendLoginResponse(server, id, AuthResult::VersionMismatch, "", "", 0, 0);
+                    return;
+                }
+
+                log.info("login attempt for '%s'", username.c_str());
+                dbClient.lookupAccount(username,
+                        [&server, id, password, username, worldHost, worldPort, sessionTtl,
+                                &dbClient](bool ok, const serverutil::DbClient::AccountLookup&
+                                                            account) {
+                            if (!ok) {
+                                log.error("account lookup failed for '%s'", username.c_str());
+                                sendLoginResponse(server, id, AuthResult::ServerError, "", "", 0,
+                                        0);
+                                return;
+                            }
+
+                            // Same response for "no such user" and "wrong
+                            // password", so the reply can't be used to
+                            // enumerate valid usernames.
+                            if (!account.found || !verifyPassword(account.passwordHash, password)) {
+                                log.info("login failed for '%s'", username.c_str());
+                                sendLoginResponse(server, id, AuthResult::InvalidCredentials, "",
+                                        "", 0, 0);
+                                return;
+                            }
+
+                            const std::string token = generateToken();
+                            dbClient.createSession(account.accountId, token, sessionTtl,
+                                    [&server, id, token, worldHost, worldPort, username,
+                                            accountId = account.accountId](bool sessionOk,
+                                            DbResult result) {
+                                        if (!sessionOk || result != DbResult::Ok) {
+                                            log.error("failed to create session for '%s'",
+                                                    username.c_str());
+                                            sendLoginResponse(server, id, AuthResult::ServerError,
+                                                    "", "", 0, 0);
+                                            return;
+                                        }
+                                        log.info("login succeeded for '%s' (account %llu)",
+                                                username.c_str(),
+                                                static_cast<unsigned long long>(accountId));
+                                        sendLoginResponse(server, id, AuthResult::Success, token,
+                                                worldHost, worldPort, accountId);
+                                    });
+                        });
+                break;
+            }
+
+            case AuthMessage::RegisterRequest: {
+                const uint32_t version = reader.u32();
+                const std::string username = reader.string();
+                const std::string password = reader.string();
+                if (reader.failed()) {
+                    sendRegisterResponse(server, id, AuthResult::MalformedRequest);
+                    return;
+                }
+                if (version != kProtocolVersion) {
+                    sendRegisterResponse(server, id, AuthResult::VersionMismatch);
+                    return;
+                }
+                if (!validUsername(username) || password.size() < kMinPasswordLength) {
+                    sendRegisterResponse(server, id, AuthResult::MalformedRequest);
+                    return;
+                }
+
+                std::string hash;
+                if (!hashPassword(password, &hash)) {
+                    log.error("password hashing failed");
+                    sendRegisterResponse(server, id, AuthResult::ServerError);
+                    return;
+                }
+
+                dbClient.createAccount(username, hash,
+                        [&server, id, username](bool ok, DbResult result, uint64_t accountId) {
+                            if (!ok) {
+                                sendRegisterResponse(server, id, AuthResult::ServerError);
+                                return;
+                            }
+                            if (result == DbResult::Conflict) {
+                                sendRegisterResponse(server, id, AuthResult::AccountExists);
+                                return;
+                            }
+                            log.info("registered '%s' as account %llu", username.c_str(),
+                                    static_cast<unsigned long long>(accountId));
+                            sendRegisterResponse(server, id, AuthResult::Success);
+                        });
+                break;
+            }
+
+            case AuthMessage::AdminAccountCreateRequest: {
+                const std::string secret = reader.string();
+                const std::string username = reader.string();
+                const std::string password = reader.string();
+                if (reader.failed()) {
+                    sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
+                            AuthResult::MalformedRequest);
+                    return;
+                }
+                if (!secretMatches(adminSecret, secret)) {
+                    log.warn("rejected admin account-create with a bad secret");
+                    sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
+                            AuthResult::NotAuthorised);
+                    return;
+                }
+                if (!validUsername(username) || password.size() < kMinPasswordLength) {
+                    sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
+                            AuthResult::MalformedRequest);
+                    return;
+                }
+
+                std::string hash;
+                if (!hashPassword(password, &hash)) {
+                    sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
+                            AuthResult::ServerError);
+                    return;
+                }
+
+                // Async: the reply goes out from the callback, so the event
+                // loop keeps serving logins while Postgres works.
+                dbClient.createAccount(username, hash,
+                        [&server, id, username](bool ok, DbResult result, uint64_t accountId) {
+                            if (!ok) {
+                                sendAdminResponse(server, id,
+                                        AuthMessage::AdminAccountCreateResponse,
+                                        AuthResult::ServerError);
+                                return;
+                            }
+                            if (result == DbResult::Conflict) {
+                                sendAdminResponse(server, id,
+                                        AuthMessage::AdminAccountCreateResponse,
+                                        AuthResult::AccountExists);
+                                return;
+                            }
+                            log.info("admin created account '%s' (id %llu)", username.c_str(),
+                                    static_cast<unsigned long long>(accountId));
+                            sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
+                                    AuthResult::Success);
+                        });
+                break;
+            }
+
+            case AuthMessage::AdminAccountDeleteRequest: {
+                const std::string secret = reader.string();
+                const std::string username = reader.string();
+                if (reader.failed()) {
+                    sendAdminResponse(server, id, AuthMessage::AdminAccountDeleteResponse,
+                            AuthResult::MalformedRequest);
+                    return;
+                }
+                if (!secretMatches(adminSecret, secret)) {
+                    log.warn("rejected admin account-delete with a bad secret");
+                    sendAdminResponse(server, id, AuthMessage::AdminAccountDeleteResponse,
+                            AuthResult::NotAuthorised);
+                    return;
+                }
+
+                dbClient.deleteAccount(username,
+                        [&server, id, username](bool ok, DbResult result) {
+                            if (!ok) {
+                                sendAdminResponse(server, id,
+                                        AuthMessage::AdminAccountDeleteResponse,
+                                        AuthResult::ServerError);
+                                return;
+                            }
+                            if (result == DbResult::NotFound) {
+                                sendAdminResponse(server, id,
+                                        AuthMessage::AdminAccountDeleteResponse,
+                                        AuthResult::NoSuchAccount);
+                                return;
+                            }
+                            log.info("admin deleted account '%s'", username.c_str());
+                            sendAdminResponse(server, id, AuthMessage::AdminAccountDeleteResponse,
+                                    AuthResult::Success);
+                        });
+                break;
+            }
+
+            default:
+                log.warn("unknown message type %u", type);
+                break;
+        }
+    };
+
+    while (gRunning) {
+        server.poll(50);
+        if (!dbClient.poll()) {
+            log.warn("lost connection to database server, reconnecting");
+            while (gRunning && !dbClient.connect(dbHost, dbPort)) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+    }
+
+    log.info("shutting down");
+    shutdownSockets();
+    return 0;
+}
