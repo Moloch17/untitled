@@ -1,0 +1,12 @@
+# Build output. The presets use build/, build-debug/ and build-client/.
+build*/
+out/
+
+# Postgres data written by the container (root-owned)
+data/
+
+.cache/
+compile_commands.json
+.vs/
+.vscode/
+CMakeUserPresets.json
