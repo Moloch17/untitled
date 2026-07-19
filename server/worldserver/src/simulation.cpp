@@ -128,8 +128,11 @@ void Simulation::buildSnapshot(net::Snapshot* out) const {
         state.position = {position.x, position.y, position.z};
         // The body's own facing, which follows movement rather than the
         // camera -- looking around while standing still must not spin it.
+        // Negated for the same reason as the client: a +Y rotation by f maps
+        // the mesh's forward (0,0,-1) to (-sin f, 0, -cos f), but movement
+        // treats forward as (+sin f, 0, -cos f).
         const float facing = player.character.facingYaw;
-        state.rotation = {0.0f, std::sin(facing * 0.5f), 0.0f, std::cos(facing * 0.5f)};
+        state.rotation = {0.0f, std::sin(-facing * 0.5f), 0.0f, std::cos(facing * 0.5f)};
         state.velocity = {velocity.x, velocity.y, velocity.z};
         // The acknowledgement the client reconciles against.
         state.lastInputSequence = player.lastInputSequence;

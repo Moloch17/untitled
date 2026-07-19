@@ -268,7 +268,12 @@ void Application::applyReplication() {
                 // snapshot says -- position and facing alike.
                 const gamesim::Vec3 predicted = mPrediction.renderPosition();
                 const float facing = mPrediction.facingYaw();
-                const net::Quat predictedFacing{0.0f, std::sin(facing * 0.5f), 0.0f,
+                // Negated: a rotation about +Y by f maps the mesh's forward
+                // (0,0,-1) to (-sin f, 0, -cos f), while movement defines
+                // forward as (+sin f, 0, -cos f). Without the sign the body is
+                // mirrored -- correct only at f = 0 and 180, which is why it
+                // looked right standing still and wrong as soon as you turned.
+                const net::Quat predictedFacing{0.0f, std::sin(-facing * 0.5f), 0.0f,
                     std::cos(facing * 0.5f)};
                 mDemoScene.setPlayerTransform(mEngine, mScene, id, true,
                         {predicted.x, predicted.y, predicted.z}, predictedFacing);

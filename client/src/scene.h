@@ -59,6 +59,7 @@ private:
     filament::MaterialInstance* mSunMaterial = nullptr;
     filament::MaterialInstance* mMoonMaterial = nullptr;
     Mesh mDiscMesh;
+    Mesh mMarkerMesh;
     bool mSunDiscInScene = false;
     bool mMoonDiscInScene = false;
 
@@ -68,6 +69,11 @@ private:
     struct PlayerVisual {
         utils::Entity entity;
         filament::MaterialInstance* material = nullptr;
+        // A small nose sitting at the capsule's local -Z. Forward is then a
+        // position in the mesh rather than a coordinate in a UV map, so it
+        // cannot end up a quarter turn out.
+        utils::Entity marker;
+        filament::MaterialInstance* markerMaterial = nullptr;
     };
     std::map<uint32_t, PlayerVisual> mPlayers;
 

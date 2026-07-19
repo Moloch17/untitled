@@ -222,15 +222,22 @@ Mesh createCapsule(Engine* engine, float radius, float halfHeight, int segments,
         const float ringY = std::sin(latitude) * radius + (topHalf ? halfHeight : -halfHeight);
 
         for (int segment = 0; segment <= segments; ++segment) {
-            const float longitude = 2.0f * F_PI * static_cast<float>(segment)
-                    / static_cast<float>(segments);
+            // The capsule's forward direction is hard-coded here: local -Z,
+            // which is the direction a character with yaw 0 faces. The
+            // longitude is offset so that u = 0.5 lands exactly on it, and the
+            // UV seam (u = 0 / 1) falls on the back where it can't be seen.
+            //
+            // Materials can therefore place a forward marker at u = 0.5 by
+            // definition rather than by trial.
+            constexpr float kForwardOffset = 0.5f * F_PI;
+            const float longitude = kForwardOffset
+                    + 2.0f * F_PI * static_cast<float>(segment) / static_cast<float>(segments);
             const float x = std::cos(longitude);
             const float z = std::sin(longitude);
 
             positions.push_back({x * ringRadius, ringY, z * ringRadius});
-            // u wraps around the capsule and v runs top to bottom. Local -Z --
-            // the direction a character faces -- lands at u = 0.75, which is
-            // where the forward marker is drawn.
+            // u wraps around the capsule, v runs top to bottom. u = 0.5 is the
+            // forward face by construction (see the longitude offset above).
             uvs.push_back({static_cast<float>(segment) / static_cast<float>(segments),
                 static_cast<float>(ring) / static_cast<float>(totalRings - 1)});
             // The normal is the hemisphere's, which on the cylinder section is

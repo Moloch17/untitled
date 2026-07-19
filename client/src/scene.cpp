@@ -37,6 +37,11 @@ constexpr float kNearPlaneForShadows = 0.5f;
 constexpr float kCelestialDistance = 260.0f;
 constexpr float kCelestialRadius = 9.0f;
 
+// The forward nose. Sits just clear of the capsule's surface on its local -Z.
+constexpr float kMarkerRadius = 0.11f;
+constexpr float kMarkerForward = -(kPlayerRadius + kMarkerRadius * 0.6f);
+constexpr float kMarkerHeight = 0.22f;
+
 }  // namespace
 
 void DemoScene::build(Engine* engine, Scene* scene) {
@@ -166,6 +171,7 @@ void DemoScene::build(Engine* engine, Scene* scene) {
             .package(CLIENTMATERIALS_UNLIT_DATA, CLIENTMATERIALS_UNLIT_SIZE)
             .build(*engine);
     mDiscMesh = createSphere(engine, kCelestialRadius);
+    mMarkerMesh = createSphere(engine, kMarkerRadius);
 
     mSunMaterial = mUnlitBase->createInstance();
     mMoonMaterial = mUnlitBase->createInstance();
@@ -267,7 +273,21 @@ void DemoScene::setPlayerTransform(Engine* engine, Scene* scene, uint32_t entity
         const float3 dark = light * 0.35f;
         visual.material->setParameter("colorA", RgbType::LINEAR, light);
         visual.material->setParameter("colorB", RgbType::LINEAR, dark);
-        visual.material->setParameter("markColor", RgbType::LINEAR, float3{0.95f, 0.95f, 0.95f});
+
+        visual.markerMaterial = mUnlitBase->createInstance();
+        visual.markerMaterial->setParameter("baseColor", RgbType::LINEAR,
+                float3{0.85f, 0.20f, 0.95f});
+
+        visual.marker = utils::EntityManager::get().create();
+        RenderableManager::Builder(1)
+                .boundingBox(mMarkerMesh.boundingBox)
+                .material(0, visual.markerMaterial)
+                .geometry(0, RenderableManager::PrimitiveType::TRIANGLES,
+                        mMarkerMesh.vertexBuffer, mMarkerMesh.indexBuffer)
+                .castShadows(false)
+                .receiveShadows(false)
+                .build(*engine, visual.marker);
+        scene->addEntity(visual.marker);
 
         visual.entity = utils::EntityManager::get().create();
         RenderableManager::Builder(1)
@@ -285,8 +305,14 @@ void DemoScene::setPlayerTransform(Engine* engine, Scene* scene, uint32_t entity
 
     auto& transformManager = engine->getTransformManager();
     const quatf orientation{rotation.w, rotation.x, rotation.y, rotation.z};
-    transformManager.setTransform(transformManager.getInstance(it->second.entity),
-            mat4f::translation(float3{position.x, position.y, position.z}) * mat4f(orientation));
+    const mat4f body = mat4f::translation(float3{position.x, position.y, position.z})
+            * mat4f(orientation);
+    transformManager.setTransform(transformManager.getInstance(it->second.entity), body);
+
+    // Offset along the body's own -Z, so it always points where the character
+    // faces.
+    transformManager.setTransform(transformManager.getInstance(it->second.marker),
+            body * mat4f::translation(float3{0.0f, kMarkerHeight, kMarkerForward}));
 }
 
 void DemoScene::removeAbsentPlayers(Engine* engine, Scene* scene,
@@ -300,6 +326,11 @@ void DemoScene::removeAbsentPlayers(Engine* engine, Scene* scene,
         engine->destroy(it->second.entity);
         utils::EntityManager::get().destroy(it->second.entity);
         engine->destroy(it->second.material);
+
+        scene->remove(it->second.marker);
+        engine->destroy(it->second.marker);
+        utils::EntityManager::get().destroy(it->second.marker);
+        engine->destroy(it->second.markerMaterial);
         it = mPlayers.erase(it);
     }
 }
@@ -326,6 +357,7 @@ void DemoScene::destroy(Engine* engine, Scene* scene) {
     mPlaneMesh.destroy(engine);
     mCubeMesh.destroy(engine);
     mCapsuleMesh.destroy(engine);
+    mMarkerMesh.destroy(engine);
     mDiscMesh.destroy(engine);
 
     engine->destroy(mPlaneMaterial);
