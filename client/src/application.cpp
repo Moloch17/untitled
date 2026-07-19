@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 #include <string>
 
 #include <GLFW/glfw3.h>
@@ -200,6 +202,7 @@ void Application::logout() {
 
     mUsername.clear();
     mLoginScreen.clearPassword();
+    mLoginScreen.resetFocus();
     mLoginScreen.setStatus("logged out", false);
     enterState(AppState::Login);
 }
@@ -409,6 +412,25 @@ void Application::run() {
     while (!glfwWindowShouldClose(mWindow)) {
         glfwPollEvents();
 
+        // Filament paces frames: beginFrame returns false for one that should
+        // be skipped. Everything below has to sit inside that check.
+        //
+        // Doing the per-frame work regardless -- rebuilding the UI geometry
+        // and uploading it -- queues thousands of buffer updates per displayed
+        // frame, which backs the driver up and reads as input lag. Typed
+        // characters aren't lost meanwhile: they accumulate in the input state
+        // and are consumed by the next frame that actually draws.
+        if (!mRenderer->beginFrame(mSwapChain)) {
+            // Yield instead of spinning a core between frames. Short enough to
+            // cost no meaningful input latency.
+            std::this_thread::sleep_for(std::chrono::microseconds(250));
+            continue;
+        }
+
+        // Timed here rather than at the top of the loop: this must be the
+        // interval between *rendered* frames. Measuring across skipped
+        // iterations would report a fraction of a millisecond and starve the
+        // fixed-tick accumulator that drives input and prediction.
         const double now = glfwGetTime();
         const double delta = now - previous;
         previous = now;
@@ -416,12 +438,10 @@ void Application::run() {
         update(delta);
         drawUi();
 
-        if (mRenderer->beginFrame(mSwapChain)) {
-            mRenderer->render(mView);
-            // Drawn after the world so it composites on top.
-            mRenderer->render(mUi.view());
-            mRenderer->endFrame();
-        }
+        mRenderer->render(mView);
+        // Drawn after the world so it composites on top.
+        mRenderer->render(mUi.view());
+        mRenderer->endFrame();
     }
 }
 

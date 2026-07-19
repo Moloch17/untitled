@@ -1,208 +1,182 @@
 #include "ui/font.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+#define STB_TRUETYPE_IMPLEMENTATION
+#include <stb_truetype.h>
+
 namespace ui {
 
-// Glyphs are drawn in a 5-6 pixel wide box inside the 8x8 cell, leaving a
-// column of spacing on the right and a blank baseline row at the bottom (used
-// by descenders on g, j, p, q, y).
-const uint8_t kFontData[kGlyphCount][kGlyphHeight] = {
-    // 0x20 ' '
-    {0, 0, 0, 0, 0, 0, 0, 0},
-    // 0x21 '!'
-    {0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00000000, 0b00100000, 0b00000000},
-    // 0x22 '"'
-    {0b01010000, 0b01010000, 0b01010000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000},
-    // 0x23 '#'
-    {0b01010000, 0b01010000, 0b11111000, 0b01010000, 0b11111000, 0b01010000, 0b01010000, 0b00000000},
-    // 0x24 '$'
-    {0b00100000, 0b01111000, 0b10100000, 0b01110000, 0b00101000, 0b11110000, 0b00100000, 0b00000000},
-    // 0x25 '%'
-    {0b11000000, 0b11001000, 0b00010000, 0b00100000, 0b01000000, 0b10011000, 0b00011000, 0b00000000},
-    // 0x26 '&'
-    {0b01100000, 0b10010000, 0b10100000, 0b01000000, 0b10101000, 0b10010000, 0b01101000, 0b00000000},
-    // 0x27 '''
-    {0b00100000, 0b00100000, 0b00100000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000},
-    // 0x28 '('
-    {0b00010000, 0b00100000, 0b01000000, 0b01000000, 0b01000000, 0b00100000, 0b00010000, 0b00000000},
-    // 0x29 ')'
-    {0b01000000, 0b00100000, 0b00010000, 0b00010000, 0b00010000, 0b00100000, 0b01000000, 0b00000000},
-    // 0x2A '*'
-    {0b00000000, 0b00100000, 0b10101000, 0b01110000, 0b10101000, 0b00100000, 0b00000000, 0b00000000},
-    // 0x2B '+'
-    {0b00000000, 0b00100000, 0b00100000, 0b11111000, 0b00100000, 0b00100000, 0b00000000, 0b00000000},
-    // 0x2C ','
-    {0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00100000, 0b00100000, 0b01000000},
-    // 0x2D '-'
-    {0b00000000, 0b00000000, 0b00000000, 0b11111000, 0b00000000, 0b00000000, 0b00000000, 0b00000000},
-    // 0x2E '.'
-    {0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b01100000, 0b01100000, 0b00000000},
-    // 0x2F '/'
-    {0b00001000, 0b00010000, 0b00010000, 0b00100000, 0b01000000, 0b01000000, 0b10000000, 0b00000000},
-    // 0x30 '0'
-    {0b01110000, 0b10001000, 0b10011000, 0b10101000, 0b11001000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x31 '1'
-    {0b00100000, 0b01100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b01110000, 0b00000000},
-    // 0x32 '2'
-    {0b01110000, 0b10001000, 0b00001000, 0b00010000, 0b00100000, 0b01000000, 0b11111000, 0b00000000},
-    // 0x33 '3'
-    {0b11111000, 0b00010000, 0b00100000, 0b00010000, 0b00001000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x34 '4'
-    {0b00010000, 0b00110000, 0b01010000, 0b10010000, 0b11111000, 0b00010000, 0b00010000, 0b00000000},
-    // 0x35 '5'
-    {0b11111000, 0b10000000, 0b11110000, 0b00001000, 0b00001000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x36 '6'
-    {0b00110000, 0b01000000, 0b10000000, 0b11110000, 0b10001000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x37 '7'
-    {0b11111000, 0b00001000, 0b00010000, 0b00100000, 0b01000000, 0b01000000, 0b01000000, 0b00000000},
-    // 0x38 '8'
-    {0b01110000, 0b10001000, 0b10001000, 0b01110000, 0b10001000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x39 '9'
-    {0b01110000, 0b10001000, 0b10001000, 0b01111000, 0b00001000, 0b00010000, 0b01100000, 0b00000000},
-    // 0x3A ':'
-    {0b00000000, 0b01100000, 0b01100000, 0b00000000, 0b01100000, 0b01100000, 0b00000000, 0b00000000},
-    // 0x3B ';'
-    {0b00000000, 0b01100000, 0b01100000, 0b00000000, 0b01100000, 0b00100000, 0b01000000, 0b00000000},
-    // 0x3C '<'
-    {0b00001000, 0b00010000, 0b00100000, 0b01000000, 0b00100000, 0b00010000, 0b00001000, 0b00000000},
-    // 0x3D '='
-    {0b00000000, 0b00000000, 0b11111000, 0b00000000, 0b11111000, 0b00000000, 0b00000000, 0b00000000},
-    // 0x3E '>'
-    {0b01000000, 0b00100000, 0b00010000, 0b00001000, 0b00010000, 0b00100000, 0b01000000, 0b00000000},
-    // 0x3F '?'
-    {0b01110000, 0b10001000, 0b00001000, 0b00010000, 0b00100000, 0b00000000, 0b00100000, 0b00000000},
-    // 0x40 '@'
-    {0b01110000, 0b10001000, 0b10111000, 0b10101000, 0b10111000, 0b10000000, 0b01110000, 0b00000000},
-    // 0x41 'A'
-    {0b01110000, 0b10001000, 0b10001000, 0b11111000, 0b10001000, 0b10001000, 0b10001000, 0b00000000},
-    // 0x42 'B'
-    {0b11110000, 0b10001000, 0b10001000, 0b11110000, 0b10001000, 0b10001000, 0b11110000, 0b00000000},
-    // 0x43 'C'
-    {0b01110000, 0b10001000, 0b10000000, 0b10000000, 0b10000000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x44 'D'
-    {0b11110000, 0b10001000, 0b10001000, 0b10001000, 0b10001000, 0b10001000, 0b11110000, 0b00000000},
-    // 0x45 'E'
-    {0b11111000, 0b10000000, 0b10000000, 0b11110000, 0b10000000, 0b10000000, 0b11111000, 0b00000000},
-    // 0x46 'F'
-    {0b11111000, 0b10000000, 0b10000000, 0b11110000, 0b10000000, 0b10000000, 0b10000000, 0b00000000},
-    // 0x47 'G'
-    {0b01110000, 0b10001000, 0b10000000, 0b10111000, 0b10001000, 0b10001000, 0b01111000, 0b00000000},
-    // 0x48 'H'
-    {0b10001000, 0b10001000, 0b10001000, 0b11111000, 0b10001000, 0b10001000, 0b10001000, 0b00000000},
-    // 0x49 'I'
-    {0b01110000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b01110000, 0b00000000},
-    // 0x4A 'J'
-    {0b00111000, 0b00010000, 0b00010000, 0b00010000, 0b00010000, 0b10010000, 0b01100000, 0b00000000},
-    // 0x4B 'K'
-    {0b10001000, 0b10010000, 0b10100000, 0b11000000, 0b10100000, 0b10010000, 0b10001000, 0b00000000},
-    // 0x4C 'L'
-    {0b10000000, 0b10000000, 0b10000000, 0b10000000, 0b10000000, 0b10000000, 0b11111000, 0b00000000},
-    // 0x4D 'M'
-    {0b10001000, 0b11011000, 0b10101000, 0b10101000, 0b10001000, 0b10001000, 0b10001000, 0b00000000},
-    // 0x4E 'N'
-    {0b10001000, 0b11001000, 0b10101000, 0b10011000, 0b10001000, 0b10001000, 0b10001000, 0b00000000},
-    // 0x4F 'O'
-    {0b01110000, 0b10001000, 0b10001000, 0b10001000, 0b10001000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x50 'P'
-    {0b11110000, 0b10001000, 0b10001000, 0b11110000, 0b10000000, 0b10000000, 0b10000000, 0b00000000},
-    // 0x51 'Q'
-    {0b01110000, 0b10001000, 0b10001000, 0b10001000, 0b10101000, 0b10010000, 0b01101000, 0b00000000},
-    // 0x52 'R'
-    {0b11110000, 0b10001000, 0b10001000, 0b11110000, 0b10100000, 0b10010000, 0b10001000, 0b00000000},
-    // 0x53 'S'
-    {0b01111000, 0b10000000, 0b10000000, 0b01110000, 0b00001000, 0b00001000, 0b11110000, 0b00000000},
-    // 0x54 'T'
-    {0b11111000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00000000},
-    // 0x55 'U'
-    {0b10001000, 0b10001000, 0b10001000, 0b10001000, 0b10001000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x56 'V'
-    {0b10001000, 0b10001000, 0b10001000, 0b10001000, 0b10001000, 0b01010000, 0b00100000, 0b00000000},
-    // 0x57 'W'
-    {0b10001000, 0b10001000, 0b10001000, 0b10101000, 0b10101000, 0b11011000, 0b10001000, 0b00000000},
-    // 0x58 'X'
-    {0b10001000, 0b10001000, 0b01010000, 0b00100000, 0b01010000, 0b10001000, 0b10001000, 0b00000000},
-    // 0x59 'Y'
-    {0b10001000, 0b10001000, 0b01010000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00000000},
-    // 0x5A 'Z'
-    {0b11111000, 0b00001000, 0b00010000, 0b00100000, 0b01000000, 0b10000000, 0b11111000, 0b00000000},
-    // 0x5B '['
-    {0b01110000, 0b01000000, 0b01000000, 0b01000000, 0b01000000, 0b01000000, 0b01110000, 0b00000000},
-    // 0x5C '\'
-    {0b10000000, 0b01000000, 0b01000000, 0b00100000, 0b00010000, 0b00010000, 0b00001000, 0b00000000},
-    // 0x5D ']'
-    {0b01110000, 0b00010000, 0b00010000, 0b00010000, 0b00010000, 0b00010000, 0b01110000, 0b00000000},
-    // 0x5E '^'
-    {0b00100000, 0b01010000, 0b10001000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000},
-    // 0x5F '_'
-    {0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b11111000, 0b00000000},
-    // 0x60 '`'
-    {0b01000000, 0b00100000, 0b00010000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000},
-    // 0x61 'a'
-    {0b00000000, 0b00000000, 0b01110000, 0b00001000, 0b01111000, 0b10001000, 0b01111000, 0b00000000},
-    // 0x62 'b'
-    {0b10000000, 0b10000000, 0b10110000, 0b11001000, 0b10001000, 0b10001000, 0b11110000, 0b00000000},
-    // 0x63 'c'
-    {0b00000000, 0b00000000, 0b01110000, 0b10000000, 0b10000000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x64 'd'
-    {0b00001000, 0b00001000, 0b01101000, 0b10011000, 0b10001000, 0b10001000, 0b01111000, 0b00000000},
-    // 0x65 'e'
-    {0b00000000, 0b00000000, 0b01110000, 0b10001000, 0b11111000, 0b10000000, 0b01110000, 0b00000000},
-    // 0x66 'f'
-    {0b00110000, 0b01001000, 0b01000000, 0b11100000, 0b01000000, 0b01000000, 0b01000000, 0b00000000},
-    // 0x67 'g' (descender)
-    {0b00000000, 0b00000000, 0b01111000, 0b10001000, 0b01111000, 0b00001000, 0b01110000, 0b00000000},
-    // 0x68 'h'
-    {0b10000000, 0b10000000, 0b10110000, 0b11001000, 0b10001000, 0b10001000, 0b10001000, 0b00000000},
-    // 0x69 'i'
-    {0b00100000, 0b00000000, 0b01100000, 0b00100000, 0b00100000, 0b00100000, 0b01110000, 0b00000000},
-    // 0x6A 'j' (descender)
-    {0b00010000, 0b00000000, 0b00110000, 0b00010000, 0b00010000, 0b10010000, 0b01100000, 0b00000000},
-    // 0x6B 'k'
-    {0b10000000, 0b10000000, 0b10010000, 0b10100000, 0b11000000, 0b10100000, 0b10010000, 0b00000000},
-    // 0x6C 'l'
-    {0b01100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b01110000, 0b00000000},
-    // 0x6D 'm'
-    {0b00000000, 0b00000000, 0b11010000, 0b10101000, 0b10101000, 0b10101000, 0b10101000, 0b00000000},
-    // 0x6E 'n'
-    {0b00000000, 0b00000000, 0b10110000, 0b11001000, 0b10001000, 0b10001000, 0b10001000, 0b00000000},
-    // 0x6F 'o'
-    {0b00000000, 0b00000000, 0b01110000, 0b10001000, 0b10001000, 0b10001000, 0b01110000, 0b00000000},
-    // 0x70 'p' (descender)
-    {0b00000000, 0b00000000, 0b11110000, 0b10001000, 0b11110000, 0b10000000, 0b10000000, 0b00000000},
-    // 0x71 'q' (descender)
-    {0b00000000, 0b00000000, 0b01101000, 0b10011000, 0b01111000, 0b00001000, 0b00001000, 0b00000000},
-    // 0x72 'r'
-    {0b00000000, 0b00000000, 0b10110000, 0b11001000, 0b10000000, 0b10000000, 0b10000000, 0b00000000},
-    // 0x73 's'
-    {0b00000000, 0b00000000, 0b01111000, 0b10000000, 0b01110000, 0b00001000, 0b11110000, 0b00000000},
-    // 0x74 't'
-    {0b01000000, 0b01000000, 0b11100000, 0b01000000, 0b01000000, 0b01001000, 0b00110000, 0b00000000},
-    // 0x75 'u'
-    {0b00000000, 0b00000000, 0b10001000, 0b10001000, 0b10001000, 0b10011000, 0b01101000, 0b00000000},
-    // 0x76 'v'
-    {0b00000000, 0b00000000, 0b10001000, 0b10001000, 0b10001000, 0b01010000, 0b00100000, 0b00000000},
-    // 0x77 'w'
-    {0b00000000, 0b00000000, 0b10001000, 0b10101000, 0b10101000, 0b10101000, 0b01010000, 0b00000000},
-    // 0x78 'x'
-    {0b00000000, 0b00000000, 0b10001000, 0b01010000, 0b00100000, 0b01010000, 0b10001000, 0b00000000},
-    // 0x79 'y' (descender)
-    {0b00000000, 0b00000000, 0b10001000, 0b10001000, 0b01111000, 0b00001000, 0b01110000, 0b00000000},
-    // 0x7A 'z'
-    {0b00000000, 0b00000000, 0b11111000, 0b00010000, 0b00100000, 0b01000000, 0b11111000, 0b00000000},
-    // 0x7B '{'
-    {0b00110000, 0b01000000, 0b01000000, 0b10000000, 0b01000000, 0b01000000, 0b00110000, 0b00000000},
-    // 0x7C '|'
-    {0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00100000, 0b00000000},
-    // 0x7D '}'
-    {0b01100000, 0b00010000, 0b00010000, 0b00001000, 0b00010000, 0b00010000, 0b01100000, 0b00000000},
-    // 0x7E '~'
-    {0b00000000, 0b00000000, 0b01101000, 0b10110000, 0b00000000, 0b00000000, 0b00000000, 0b00000000},
-};
+namespace {
 
-const uint8_t* glyphRows(char c) {
-    if (c < kFirstGlyph || c > kLastGlyph) {
-        c = '?';
+constexpr char kFirstGlyph = 0x20;
+constexpr char kLastGlyph = 0x7E;
+
+// Big enough for every printable character at all four sizes with room to
+// spare. build() fails loudly rather than silently dropping glyphs if a future
+// size doesn't fit.
+constexpr int kAtlasSize = 1024;
+
+// Keeps bilinear sampling from bleeding between neighbouring glyphs.
+constexpr int kPadding = 1;
+
+}  // namespace
+
+bool Font::build(const uint8_t* ttfData, size_t ttfSize, const std::vector<int>& pixelSizes) {
+    stbtt_fontinfo info;
+    if (!stbtt_InitFont(&info, ttfData, stbtt_GetFontOffsetForIndex(ttfData, 0))) {
+        return false;
     }
-    return kFontData[c - kFirstGlyph];
+    (void) ttfSize;
+
+    mAtlasWidth = kAtlasSize;
+    mAtlasHeight = kAtlasSize;
+    mPixels.assign(static_cast<size_t>(mAtlasWidth) * mAtlasHeight * 4, 0);
+
+    // Shelf packing: fill a row left to right, drop to a new row when full.
+    int penX = kPadding;
+    int penY = kPadding;
+    int rowHeight = 0;
+
+    // One opaque texel first, for solid rectangles.
+    {
+        const size_t index = (static_cast<size_t>(penY) * mAtlasWidth + penX) * 4;
+        mPixels[index + 0] = 255;
+        mPixels[index + 1] = 255;
+        mPixels[index + 2] = 255;
+        mPixels[index + 3] = 255;
+        mWhiteU = (penX + 0.5f) / static_cast<float>(mAtlasWidth);
+        mWhiteV = (penY + 0.5f) / static_cast<float>(mAtlasHeight);
+        penX += 1 + kPadding * 2;
+        rowHeight = 1;
+    }
+
+    for (int pixelSize : pixelSizes) {
+        const float scale = stbtt_ScaleForPixelHeight(&info, static_cast<float>(pixelSize));
+
+        int ascent = 0;
+        int descent = 0;
+        int lineGap = 0;
+        stbtt_GetFontVMetrics(&info, &ascent, &descent, &lineGap);
+
+        SizedFont sized;
+        sized.ascent = ascent * scale;
+        sized.lineHeight = (ascent - descent + lineGap) * scale;
+
+        for (char c = kFirstGlyph; c <= kLastGlyph; ++c) {
+            int advance = 0;
+            int leftBearing = 0;
+            stbtt_GetCodepointHMetrics(&info, c, &advance, &leftBearing);
+
+            int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+            stbtt_GetCodepointBitmapBox(&info, c, scale, scale, &x0, &y0, &x1, &y1);
+
+            const int width = x1 - x0;
+            const int height = y1 - y0;
+
+            Glyph glyph;
+            glyph.advance = advance * scale;
+            glyph.offsetX = static_cast<float>(x0);
+            glyph.offsetY = static_cast<float>(y0);
+            glyph.width = static_cast<float>(width);
+            glyph.height = static_cast<float>(height);
+
+            if (width > 0 && height > 0) {
+                if (penX + width + kPadding > mAtlasWidth) {
+                    penX = kPadding;
+                    penY += rowHeight + kPadding * 2;
+                    rowHeight = 0;
+                }
+                if (penY + height + kPadding > mAtlasHeight) {
+                    return false;  // out of room; raise kAtlasSize
+                }
+
+                // Rasterise coverage into a scratch buffer, then expand it to
+                // white RGB with coverage in alpha.
+                std::vector<uint8_t> coverage(static_cast<size_t>(width) * height);
+                stbtt_MakeCodepointBitmap(&info, coverage.data(), width, height, width, scale,
+                        scale, c);
+
+                for (int y = 0; y < height; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        const size_t destination =
+                                (static_cast<size_t>(penY + y) * mAtlasWidth + penX + x) * 4;
+                        mPixels[destination + 0] = 255;
+                        mPixels[destination + 1] = 255;
+                        mPixels[destination + 2] = 255;
+                        mPixels[destination + 3] = coverage[static_cast<size_t>(y) * width + x];
+                    }
+                }
+
+                glyph.u0 = static_cast<float>(penX) / mAtlasWidth;
+                glyph.v0 = static_cast<float>(penY) / mAtlasHeight;
+                glyph.u1 = static_cast<float>(penX + width) / mAtlasWidth;
+                glyph.v1 = static_cast<float>(penY + height) / mAtlasHeight;
+
+                penX += width + kPadding * 2;
+                rowHeight = std::max(rowHeight, height);
+            }
+
+            sized.glyphs[c] = glyph;
+        }
+
+        mSizes[pixelSize] = std::move(sized);
+    }
+
+    return true;
+}
+
+int Font::nearestSize(int requested) const {
+    int best = 0;
+    int bestDistance = 1 << 30;
+    for (const auto& [size, sized] : mSizes) {
+        const int distance = std::abs(size - requested);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = size;
+        }
+    }
+    return best;
+}
+
+const Glyph* Font::glyph(int pixelSize, char c) const {
+    auto sized = mSizes.find(pixelSize);
+    if (sized == mSizes.end()) {
+        return nullptr;
+    }
+    auto glyph = sized->second.glyphs.find(c);
+    if (glyph == sized->second.glyphs.end()) {
+        // Anything outside the baked range draws as '?' rather than nothing, so
+        // it's visible that a character is missing.
+        glyph = sized->second.glyphs.find('?');
+        if (glyph == sized->second.glyphs.end()) {
+            return nullptr;
+        }
+    }
+    return &glyph->second;
+}
+
+float Font::textWidth(int pixelSize, const std::string& text) const {
+    const int size = nearestSize(pixelSize);
+    float width = 0.0f;
+    for (char c : text) {
+        if (const Glyph* g = glyph(size, c)) {
+            width += g->advance;
+        }
+    }
+    return width;
+}
+
+float Font::ascent(int pixelSize) const {
+    auto sized = mSizes.find(nearestSize(pixelSize));
+    return sized == mSizes.end() ? 0.0f : sized->second.ascent;
+}
+
+float Font::lineHeight(int pixelSize) const {
+    auto sized = mSizes.find(nearestSize(pixelSize));
+    return sized == mSizes.end() ? 0.0f : sized->second.lineHeight;
 }
 
 }  // namespace ui

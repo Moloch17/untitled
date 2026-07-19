@@ -67,6 +67,10 @@ foreach (mat_src ${MATERIAL_SRCS})
     list(APPEND RESOURCE_BINS ${output_path})
 endforeach()
 
+# The UI font is embedded in the executable the same way, so the client has no
+# runtime asset paths to resolve.
+list(APPEND RESOURCE_BINS ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/roboto_medium.ttf)
+
 # Defines RESGEN_OUTPUTS / RESGEN_FLAGS / RESGEN_SOURCE. The archive name has to
 # be unique across the whole link, hence the "client" prefix.
 get_resgen_vars(${RESOURCE_DIR} clientmaterials)
@@ -102,7 +106,7 @@ add_executable(client
     ${RESGEN_SOURCE}
 )
 
-target_include_directories(client PRIVATE src ${RESOURCE_DIR})
+target_include_directories(client PRIVATE src ${RESOURCE_DIR} deps/stb)
 
 target_link_libraries(client PRIVATE
     net_client

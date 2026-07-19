@@ -18,20 +18,6 @@ namespace ui {
 
 namespace {
 
-// The atlas holds 16x6 glyph cells plus one extra row whose first cell is
-// solid white, so untextured rectangles can share the same texture and the
-// entire UI draws in a single batch.
-constexpr int kAtlasCols = 16;
-constexpr int kGlyphRows = 6;  // 96 cells, 95 glyphs
-constexpr int kAtlasRows = kGlyphRows + 1;
-constexpr int kAtlasWidth = kAtlasCols * kGlyphWidth;    // 128
-constexpr int kAtlasHeight = kAtlasRows * kGlyphHeight;  // 56
-
-// Centre of the white cell, so bilinear or edge sampling can't bleed into a
-// neighbouring glyph.
-constexpr float kWhiteU = (0.5f * kGlyphWidth) / kAtlasWidth;
-constexpr float kWhiteV = ((kGlyphRows + 0.5f) * kGlyphHeight) / kAtlasHeight;
-
 // Enough for a dense screen of text; each glyph is one quad.
 constexpr size_t kMaxQuads = 8192;
 constexpr size_t kMaxVertices = kMaxQuads * 4;
@@ -52,63 +38,31 @@ bool UiRenderer::init(Engine* engine) {
                         .build(*engine);
     mMaterialInstance = mMaterial->createInstance();
 
-    // Build the atlas: white pixels with alpha from the glyph bitmap, so the
-    // vertex colour can tint text to anything.
-    auto* pixels = new uint8_t[kAtlasWidth * kAtlasHeight * 4];
-    std::memset(pixels, 0, static_cast<size_t>(kAtlasWidth) * kAtlasHeight * 4);
-
-    for (int glyph = 0; glyph < kGlyphCount; ++glyph) {
-        const uint8_t* rows = kFontData[glyph];
-        const int cellX = (glyph % kAtlasCols) * kGlyphWidth;
-        const int cellY = (glyph / kAtlasCols) * kGlyphHeight;
-        for (int row = 0; row < kGlyphHeight; ++row) {
-            for (int column = 0; column < kGlyphWidth; ++column) {
-                const bool on = (rows[row] & (0x80u >> column)) != 0;
-                if (!on) {
-                    continue;
-                }
-                const size_t index =
-                        (static_cast<size_t>(cellY + row) * kAtlasWidth + cellX + column) * 4;
-                pixels[index + 0] = 255;
-                pixels[index + 1] = 255;
-                pixels[index + 2] = 255;
-                pixels[index + 3] = 255;
-            }
-        }
+    // Rasterise Roboto at the sizes the interface uses. The TTF is embedded in
+    // the executable alongside the shaders; see client/CMakeLists.txt.
+    if (!mFont.build(CLIENTMATERIALS_ROBOTO_MEDIUM_DATA, CLIENTMATERIALS_ROBOTO_MEDIUM_SIZE,
+                {kFontSizeSmall, kFontSizeBody, kFontSizeHeading, kFontSizeTitle})) {
+        return false;
     }
-
-    // The solid-white cell used by rect().
-    for (int row = 0; row < kGlyphHeight; ++row) {
-        for (int column = 0; column < kGlyphWidth; ++column) {
-            const size_t index =
-                    (static_cast<size_t>(kGlyphRows * kGlyphHeight + row) * kAtlasWidth + column)
-                    * 4;
-            pixels[index + 0] = 255;
-            pixels[index + 1] = 255;
-            pixels[index + 2] = 255;
-            pixels[index + 3] = 255;
-        }
-    }
-
     mAtlas = Texture::Builder()
-                     .width(kAtlasWidth)
-                     .height(kAtlasHeight)
+                     .width(static_cast<uint32_t>(mFont.atlasWidth()))
+                     .height(static_cast<uint32_t>(mFont.atlasHeight()))
                      .levels(1)
                      .format(Texture::InternalFormat::RGBA8)
                      .sampler(Texture::Sampler::SAMPLER_2D)
                      .build(*engine);
 
-    Texture::PixelBufferDescriptor buffer(pixels,
-            static_cast<size_t>(kAtlasWidth) * kAtlasHeight * 4, Texture::Format::RGBA,
-            Texture::Type::UBYTE, [](void* data, size_t, void*) {
-                delete[] static_cast<uint8_t*>(data);
-            });
+    auto* pixels = new std::vector<uint8_t>(mFont.pixels());
+    Texture::PixelBufferDescriptor buffer(pixels->data(), pixels->size(), Texture::Format::RGBA,
+            Texture::Type::UBYTE, [](void*, size_t, void* user) {
+                delete static_cast<std::vector<uint8_t>*>(user);
+            }, pixels);
     mAtlas->setImage(*engine, 0, std::move(buffer));
 
-    // Nearest filtering: this is a pixel font, and blurring it would defeat the
-    // point.
-    const TextureSampler sampler(TextureSampler::MinFilter::NEAREST,
-            TextureSampler::MagFilter::NEAREST);
+    // Linear filtering: glyphs are rasterised at the size they're drawn, and
+    // linear keeps their antialiased edges smooth.
+    const TextureSampler sampler(TextureSampler::MinFilter::LINEAR,
+            TextureSampler::MagFilter::LINEAR);
     mMaterialInstance->setParameter("atlas", mAtlas, sampler);
 
     mVertexBuffer = VertexBuffer::Builder()
@@ -202,7 +156,9 @@ void UiRenderer::quad(float x, float y, float width, float height, float u0, flo
 }
 
 void UiRenderer::rect(float x, float y, float width, float height, Color color) {
-    quad(x, y, width, height, kWhiteU, kWhiteV, kWhiteU, kWhiteV, color);
+    const float u = mFont.whiteU();
+    const float v = mFont.whiteV();
+    quad(x, y, width, height, u, v, u, v, color);
 }
 
 void UiRenderer::rectOutline(float x, float y, float width, float height, float thickness,
@@ -213,37 +169,31 @@ void UiRenderer::rectOutline(float x, float y, float width, float height, float 
     rect(x + width - thickness, y, thickness, height, color);       // right
 }
 
-void UiRenderer::text(float x, float y, const std::string& value, Color color, float scale) {
-    const float advance = kGlyphWidth * scale;
+void UiRenderer::text(float x, float y, const std::string& value, Color color, int pixelSize) {
+    const int size = mFont.nearestSize(pixelSize);
+    // `y` is the top of the line; glyph offsets are relative to the baseline.
+    const float baseline = y + mFont.ascent(size);
     float penX = x;
 
     for (char c : value) {
-        if (c == ' ') {
-            penX += advance;
+        const Glyph* glyph = mFont.glyph(size, c);
+        if (!glyph) {
             continue;
         }
-
-        const int index = (c < kFirstGlyph || c > kLastGlyph) ? ('?' - kFirstGlyph)
-                                                              : (c - kFirstGlyph);
-        const int cellX = index % kAtlasCols;
-        const int cellY = index / kAtlasCols;
-
-        const float u0 = static_cast<float>(cellX * kGlyphWidth) / kAtlasWidth;
-        const float v0 = static_cast<float>(cellY * kGlyphHeight) / kAtlasHeight;
-        const float u1 = static_cast<float>((cellX + 1) * kGlyphWidth) / kAtlasWidth;
-        const float v1 = static_cast<float>((cellY + 1) * kGlyphHeight) / kAtlasHeight;
-
-        quad(penX, y, kGlyphWidth * scale, kGlyphHeight * scale, u0, v0, u1, v1, color);
-        penX += advance;
+        if (glyph->width > 0.0f && glyph->height > 0.0f) {
+            quad(penX + glyph->offsetX, baseline + glyph->offsetY, glyph->width, glyph->height,
+                    glyph->u0, glyph->v0, glyph->u1, glyph->v1, color);
+        }
+        penX += glyph->advance;
     }
 }
 
-float UiRenderer::textWidth(const std::string& value, float scale) {
-    return static_cast<float>(value.size()) * kGlyphWidth * scale;
+float UiRenderer::textWidth(const std::string& value, int pixelSize) const {
+    return mFont.textWidth(pixelSize, value);
 }
 
-float UiRenderer::textHeight(float scale) {
-    return kGlyphHeight * scale;
+float UiRenderer::textHeight(int pixelSize) const {
+    return mFont.lineHeight(pixelSize);
 }
 
 void UiRenderer::end(Engine* engine) {

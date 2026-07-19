@@ -32,12 +32,15 @@ public:
 
     void setStatus(const std::string& status, bool error);
     void clearPassword() { mPassword.clear(); }
+    // Re-focuses the first field next time the screen is shown.
+    void resetFocus() { mFocusInitialised = false; }
 
 private:
     std::string mUsername;
     std::string mPassword;
     std::string mStatus;
     bool mStatusIsError = false;
+    bool mFocusInitialised = false;
 };
 
 // Escape menu shown over the world.

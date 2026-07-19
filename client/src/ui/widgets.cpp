@@ -1,12 +1,14 @@
 #include "ui/widgets.h"
 
+#include <algorithm>
 #include <chrono>
+#include <iterator>
 
 namespace ui {
 
 namespace {
 
-constexpr float kTextScale = 2.0f;
+constexpr int kTextSize = kFontSizeBody;
 constexpr float kBorder = 2.0f;
 constexpr float kPadding = 10.0f;
 constexpr double kCaretBlinkSeconds = 0.53;
@@ -17,9 +19,9 @@ double now() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 
-// Centres text vertically in a box of the given height.
-float centreTextY(float y, float height, float scale) {
-    return y + (height - UiRenderer::textHeight(scale)) * 0.5f;
+// Centres a line of text vertically in a box of the given height.
+float centreTextY(const UiRenderer& renderer, float y, float height, int pixelSize) {
+    return y + (height - renderer.textHeight(pixelSize)) * 0.5f;
 }
 
 }  // namespace
@@ -28,6 +30,11 @@ void Ui::begin(UiRenderer* renderer, const InputState& input) {
     mRenderer = renderer;
     mInput = input;
     mCaretTimer = now();
+
+    // Tab is handled in end(), once every field has registered itself, so the
+    // order matches what's on screen this frame.
+    mTabPending = input.tab;
+    mTextFields.clear();
 }
 
 void Ui::end() {
@@ -39,6 +46,18 @@ void Ui::end() {
     if (mInput.mouseReleased) {
         mActive = 0;
     }
+
+    // Tab moves to the next text field, wrapping at the end. With nothing
+    // focused it selects the first, so Tab always does something useful.
+    if (mTabPending && !mTextFields.empty()) {
+        auto current = std::find(mTextFields.begin(), mTextFields.end(), mFocused);
+        if (current == mTextFields.end() || std::next(current) == mTextFields.end()) {
+            mFocused = mTextFields.front();
+        } else {
+            mFocused = *std::next(current);
+        }
+    }
+    mTabPending = false;
 }
 
 bool Ui::hovered(float x, float y, float width, float height) const {
@@ -51,17 +70,17 @@ void Ui::panel(float x, float y, float width, float height) {
     mRenderer->rectOutline(x, y, width, height, kBorder, theme.border);
 }
 
-void Ui::label(float x, float y, const std::string& text, float scale) {
-    mRenderer->text(x, y, text, theme.text, scale);
+void Ui::label(float x, float y, const std::string& text, int pixelSize) {
+    mRenderer->text(x, y, text, theme.text, pixelSize);
 }
 
-void Ui::labelDim(float x, float y, const std::string& text, float scale) {
-    mRenderer->text(x, y, text, theme.textDim, scale);
+void Ui::labelDim(float x, float y, const std::string& text, int pixelSize) {
+    mRenderer->text(x, y, text, theme.textDim, pixelSize);
 }
 
-void Ui::labelCentred(float centreX, float y, const std::string& text, float scale) {
-    mRenderer->text(centreX - UiRenderer::textWidth(text, scale) * 0.5f, y, text, theme.text,
-            scale);
+void Ui::labelCentred(float centreX, float y, const std::string& text, int pixelSize) {
+    mRenderer->text(centreX - mRenderer->textWidth(text, pixelSize) * 0.5f, y, text, theme.text,
+            pixelSize);
 }
 
 bool Ui::buttonInternal(int id, float x, float y, float width, float height,
@@ -86,8 +105,8 @@ bool Ui::buttonInternal(int id, float x, float y, float width, float height,
         mRenderer->rectOutline(x, y, width, height, kBorder, theme.borderFocused);
     }
 
-    mRenderer->text(x + (width - UiRenderer::textWidth(text, kTextScale)) * 0.5f,
-            centreTextY(y, height, kTextScale), text, theme.text, kTextScale);
+    mRenderer->text(x + (width - mRenderer->textWidth(text, kTextSize)) * 0.5f,
+            centreTextY(*mRenderer, y, height, kTextSize), text, theme.text, kTextSize);
     return clicked;
 }
 
@@ -104,6 +123,9 @@ bool Ui::dangerButton(int id, float x, float y, float width, float height,
 
 bool Ui::textField(int id, float x, float y, float width, float height, std::string& value,
         const std::string& placeholder, bool password, size_t maxLength) {
+    // Registered in draw order so Tab cycles top to bottom.
+    mTextFields.push_back(id);
+
     const bool isHovered = hovered(x, y, width, height);
     if (isHovered && mInput.mousePressed) {
         mFocused = id;
@@ -134,22 +156,23 @@ bool Ui::textField(int id, float x, float y, float width, float height, std::str
             isFocused ? theme.borderFocused : theme.border);
 
     const float textX = x + kPadding;
-    const float textY = centreTextY(y, height, kTextScale);
+    const float textY = centreTextY(*mRenderer, y, height, kTextSize);
+    const std::string shown = password ? std::string(value.size(), '*') : value;
 
     if (value.empty() && !isFocused) {
-        mRenderer->text(textX, textY, placeholder, theme.textDim, kTextScale);
+        mRenderer->text(textX, textY, placeholder, theme.textDim, kTextSize);
     } else {
-        const std::string shown = password ? std::string(value.size(), '*') : value;
-        mRenderer->text(textX, textY, shown, theme.text, kTextScale);
+        mRenderer->text(textX, textY, shown, theme.text, kTextSize);
     }
 
     // Blinking caret, drawn after the text so it sits at the insertion point.
     if (isFocused) {
         const bool visible = static_cast<int>(mCaretTimer / kCaretBlinkSeconds) % 2 == 0;
         if (visible) {
-            const float caretX = textX + UiRenderer::textWidth(
-                    password ? std::string(value.size(), '*') : value, kTextScale);
-            mRenderer->rect(caretX, textY, 2.0f, UiRenderer::textHeight(kTextScale), theme.text);
+            const float caretX = textX + mRenderer->textWidth(shown, kTextSize);
+            const float caretHeight = mRenderer->textHeight(kTextSize) * 0.8f;
+            mRenderer->rect(caretX + 1.0f, textY + caretHeight * 0.15f, 2.0f, caretHeight,
+                    theme.text);
         }
     }
 

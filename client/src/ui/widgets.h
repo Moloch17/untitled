@@ -62,9 +62,10 @@ public:
     void end();
 
     void panel(float x, float y, float width, float height);
-    void label(float x, float y, const std::string& text, float scale = 2.0f);
-    void labelDim(float x, float y, const std::string& text, float scale = 2.0f);
-    void labelCentred(float centreX, float y, const std::string& text, float scale = 2.0f);
+    void label(float x, float y, const std::string& text, int pixelSize = kFontSizeBody);
+    void labelDim(float x, float y, const std::string& text, int pixelSize = kFontSizeBody);
+    void labelCentred(float centreX, float y, const std::string& text,
+            int pixelSize = kFontSizeBody);
 
     // Returns true on the frame the button is released while hovered, which is
     // what users expect: pressing and dragging off cancels.
@@ -77,9 +78,10 @@ public:
     bool textField(int id, float x, float y, float width, float height, std::string& value,
             const std::string& placeholder, bool password = false, size_t maxLength = 32);
 
-    // Moves focus to the next field on Tab, and lets a screen set initial focus.
+    // Lets a screen set initial focus, so a form is typable without clicking.
     void setFocus(int id) { mFocused = id; }
     int focused() const { return mFocused; }
+    bool hasFocus() const { return mFocused != 0; }
 
     Theme theme;
 
@@ -93,6 +95,13 @@ private:
 
     int mFocused = 0;
     int mActive = 0;  // widget currently held down
+
+    // Text fields register themselves each frame in draw order, which is what
+    // Tab cycles through. Rebuilt every frame so it follows the current screen
+    // rather than going stale when the layout changes.
+    std::vector<int> mTextFields;
+    bool mTabPending = false;
+
     double mCaretTimer = 0.0;
 };
 

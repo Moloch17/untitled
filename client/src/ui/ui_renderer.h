@@ -13,6 +13,8 @@
 #include <filament/View.h>
 #include <utils/Entity.h>
 
+#include "ui/font.h"
+
 namespace ui {
 
 // RGBA, 0-255. Kept byte-sized because that's what the vertex format uses.
@@ -43,14 +45,18 @@ public:
     void rect(float x, float y, float width, float height, Color color);
     // Outline drawn as four thin rects, inset within the given bounds.
     void rectOutline(float x, float y, float width, float height, float thickness, Color color);
-    // `scale` multiplies the 8x8 cell; use whole numbers to stay crisp.
-    void text(float x, float y, const std::string& value, Color color, float scale = 2.0f);
+    // Draws with `y` as the top of the line. `pixelSize` snaps to the nearest
+    // baked font size; see ui/font.h.
+    void text(float x, float y, const std::string& value, Color color,
+            int pixelSize = kFontSizeBody);
 
     // Uploads the batch and points the renderable at it.
     void end(filament::Engine* engine);
 
-    static float textWidth(const std::string& value, float scale);
-    static float textHeight(float scale);
+    // Not static any more: real glyph widths come from the font's metrics.
+    float textWidth(const std::string& value, int pixelSize) const;
+    float textHeight(int pixelSize) const;
+    const Font& font() const { return mFont; }
 
     filament::View* view() const { return mView; }
     int width() const { return mWidth; }
@@ -66,6 +72,7 @@ private:
     void quad(float x, float y, float width, float height, float u0, float v0, float u1, float v1,
             Color color);
 
+    Font mFont;
     filament::Material* mMaterial = nullptr;
     filament::MaterialInstance* mMaterialInstance = nullptr;
     filament::Texture* mAtlas = nullptr;

@@ -18,8 +18,11 @@ enum WidgetId {
 constexpr float kFieldHeight = 40.0f;
 constexpr float kButtonHeight = 44.0f;
 constexpr float kRowGap = 16.0f;
-constexpr float kTitleScale = 4.0f;
-constexpr float kLabelScale = 2.0f;
+constexpr int kTitleSize = ui::kFontSizeTitle;
+constexpr int kLabelSize = ui::kFontSizeSmall;
+constexpr int kStatusSize = ui::kFontSizeSmall;
+constexpr int kSubtitleSize = ui::kFontSizeSmall;
+constexpr int kHeadingSize = ui::kFontSizeHeading;
 
 }  // namespace
 
@@ -29,6 +32,13 @@ void LoginScreen::setStatus(const std::string& status, bool error) {
 }
 
 LoginScreen::Action LoginScreen::draw(ui::Ui& ui, ui::UiRenderer& renderer, AppState state) {
+    // Focus the first field on arrival so the form can be typed into without
+    // clicking it first, and so the caret is visible straight away.
+    if (!mFocusInitialised) {
+        ui.setFocus(kIdUsername);
+        mFocusInitialised = true;
+    }
+
     const float screenWidth = static_cast<float>(renderer.width());
     const float screenHeight = static_cast<float>(renderer.height());
 
@@ -46,20 +56,20 @@ LoginScreen::Action LoginScreen::draw(ui::Ui& ui, ui::UiRenderer& renderer, AppS
     const float contentWidth = panelWidth - 64.0f;
     float y = panelY + 28.0f;
 
-    ui.labelCentred(panelX + panelWidth * 0.5f, y, "UNTITLED", kTitleScale);
-    y += ui::UiRenderer::textHeight(kTitleScale) + 28.0f;
+    ui.labelCentred(panelX + panelWidth * 0.5f, y, "UNTITLED", kTitleSize);
+    y += renderer.textHeight(kTitleSize) + 24.0f;
 
     const bool busy = state == AppState::Connecting;
 
-    ui.labelDim(contentX, y, "USERNAME", kLabelScale);
-    y += ui::UiRenderer::textHeight(kLabelScale) + 6.0f;
+    ui.labelDim(contentX, y, "USERNAME", kLabelSize);
+    y += renderer.textHeight(kLabelSize) + 4.0f;
     const bool usernameSubmitted =
             ui.textField(kIdUsername, contentX, y, contentWidth, kFieldHeight, mUsername,
                     "enter username");
     y += kFieldHeight + kRowGap;
 
-    ui.labelDim(contentX, y, "PASSWORD", kLabelScale);
-    y += ui::UiRenderer::textHeight(kLabelScale) + 6.0f;
+    ui.labelDim(contentX, y, "PASSWORD", kLabelSize);
+    y += renderer.textHeight(kLabelSize) + 4.0f;
     const bool passwordSubmitted =
             ui.textField(kIdPassword, contentX, y, contentWidth, kFieldHeight, mPassword,
                     "enter password", /*password=*/true);
@@ -75,8 +85,9 @@ LoginScreen::Action LoginScreen::draw(ui::Ui& ui, ui::UiRenderer& renderer, AppS
     if (!mStatus.empty()) {
         const ui::Color colour = mStatusIsError ? ui::Color::rgba(230, 110, 100, 255)
                                                 : ui.theme.textDim;
-        const float textX = panelX + (panelWidth - ui::UiRenderer::textWidth(mStatus, 1.5f)) * 0.5f;
-        renderer.text(textX, y, mStatus, colour, 1.5f);
+        const float textX =
+                panelX + (panelWidth - renderer.textWidth(mStatus, kStatusSize)) * 0.5f;
+        renderer.text(textX, y, mStatus, colour, kStatusSize);
     }
 
     if (quitClicked) {
@@ -105,13 +116,13 @@ MenuScreen::Action MenuScreen::draw(ui::Ui& ui, ui::UiRenderer& renderer,
     ui.panel(panelX, panelY, panelWidth, panelHeight);
 
     float y = panelY + 26.0f;
-    ui.labelCentred(panelX + panelWidth * 0.5f, y, "PAUSED", 3.0f);
-    y += ui::UiRenderer::textHeight(3.0f) + 10.0f;
+    ui.labelCentred(panelX + panelWidth * 0.5f, y, "PAUSED", kHeadingSize);
+    y += renderer.textHeight(kHeadingSize) + 6.0f;
 
     const std::string subtitle = "logged in as " + username;
-    renderer.text(panelX + (panelWidth - ui::UiRenderer::textWidth(subtitle, 1.5f)) * 0.5f, y,
-            subtitle, ui.theme.textDim, 1.5f);
-    y += ui::UiRenderer::textHeight(1.5f) + 26.0f;
+    renderer.text(panelX + (panelWidth - renderer.textWidth(subtitle, kSubtitleSize)) * 0.5f, y,
+            subtitle, ui.theme.textDim, kSubtitleSize);
+    y += renderer.textHeight(kSubtitleSize) + 22.0f;
 
     const float contentX = panelX + 30.0f;
     const float contentWidth = panelWidth - 60.0f;
