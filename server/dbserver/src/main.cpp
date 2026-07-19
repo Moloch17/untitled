@@ -72,6 +72,10 @@ int main() {
     if (!gRunning) {
         return 0;
     }
+    if (!database.migrate()) {
+        log.error("schema migration failed: %s", database.lastError().c_str());
+        return 1;
+    }
     log.info("connected to postgres");
 
     serverutil::TcpServer server;
@@ -117,13 +121,37 @@ int main() {
                 writer.u8(ok && found ? 1 : 0);
                 writer.u64(account.id);
                 writer.string(account.passwordHash);
+                writer.u8(account.permissionLevel);
                 server.send(id, static_cast<uint16_t>(DbMessage::AccountLookupResponse), payload);
                 break;
             }
 
+            case DbMessage::AccountSetLevelRequest: {
+                const std::string username = reader.string();
+                const uint8_t level = reader.u8();
+                bool found = false;
+                const bool ok = !reader.failed()
+                        && database.setPermissionLevel(username, level, &found);
+                if (ok && found) {
+                    log.info("set '%s' permission level to %u", username.c_str(), level);
+                }
+                writer.u32(requestId);
+                writer.u8(static_cast<uint8_t>(!ok ? DbResult::Error
+                                : !found            ? DbResult::NotFound
+                                                    : DbResult::Ok));
+                server.send(id, static_cast<uint16_t>(DbMessage::AccountSetLevelResponse),
+                        payload);
+                break;
+            }
+
+            case DbMessage::AccountCreateWithLevelRequest:
             case DbMessage::AccountCreateRequest: {
                 const std::string username = reader.string();
                 const std::string passwordHash = reader.string();
+                const uint8_t level = static_cast<DbMessage>(type)
+                                == DbMessage::AccountCreateWithLevelRequest
+                        ? reader.u8()
+                        : 0;
                 uint64_t accountId = 0;
                 bool conflict = false;
                 const bool ok = !reader.failed()
@@ -131,8 +159,12 @@ int main() {
                 if (!ok) {
                     log.error("account create failed: %s", database.lastError().c_str());
                 } else if (!conflict) {
-                    log.info("created account '%s' (id %llu)", username.c_str(),
-                            static_cast<unsigned long long>(accountId));
+                    if (level != 0) {
+                        bool found = false;
+                        database.setPermissionLevel(username, level, &found);
+                    }
+                    log.info("created account '%s' (id %llu, level %u)", username.c_str(),
+                            static_cast<unsigned long long>(accountId), level);
                 }
                 writer.u32(requestId);
                 writer.u8(static_cast<uint8_t>(!ok       ? DbResult::Error
@@ -189,6 +221,7 @@ int main() {
                 writer.u8(ok && found ? 1 : 0);
                 writer.u64(session.accountId);
                 writer.string(session.username);
+                writer.u8(session.permissionLevel);
                 server.send(id, static_cast<uint16_t>(DbMessage::SessionLookupResponse), payload);
                 break;
             }

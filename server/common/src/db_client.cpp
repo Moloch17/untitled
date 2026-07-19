@@ -106,6 +106,7 @@ void DbClient::lookupAccount(const std::string& username,
                 result.found = reader.u8() != 0;
                 result.accountId = reader.u64();
                 result.passwordHash = reader.string();
+                result.permissionLevel = reader.u8();
                 callback(!reader.failed(), result);
             });
 }
@@ -156,6 +157,63 @@ void DbClient::deleteAccount(const std::string& username,
     registerHandler(requestId,
             [callback](bool ok, uint16_t type, const std::vector<uint8_t>& data) {
                 if (!ok || type != static_cast<uint16_t>(DbMessage::AccountDeleteResponse)) {
+                    callback(false, DbResult::Error);
+                    return;
+                }
+                ByteReader reader(data.data(), data.size());
+                reader.u32();
+                const auto result = static_cast<DbResult>(reader.u8());
+                callback(!reader.failed(), result);
+            });
+}
+
+void DbClient::createAccountWithLevel(const std::string& username,
+        const std::string& passwordHash, uint8_t level,
+        std::function<void(bool, DbResult, uint64_t)> callback) {
+    if (!mConnected) {
+        callback(false, DbResult::Error, 0);
+        return;
+    }
+    const uint32_t requestId = nextRequestId();
+    std::vector<uint8_t> payload;
+    ByteWriter writer(payload);
+    writer.u32(requestId);
+    writer.string(username);
+    writer.string(passwordHash);
+    writer.u8(level);
+    mStream->send(static_cast<uint16_t>(DbMessage::AccountCreateWithLevelRequest), payload);
+
+    registerHandler(requestId,
+            [callback](bool ok, uint16_t type, const std::vector<uint8_t>& data) {
+                if (!ok || type != static_cast<uint16_t>(DbMessage::AccountCreateResponse)) {
+                    callback(false, DbResult::Error, 0);
+                    return;
+                }
+                ByteReader reader(data.data(), data.size());
+                reader.u32();
+                const auto result = static_cast<DbResult>(reader.u8());
+                const uint64_t accountId = reader.u64();
+                callback(!reader.failed(), result, accountId);
+            });
+}
+
+void DbClient::setPermissionLevel(const std::string& username, uint8_t level,
+        std::function<void(bool, DbResult)> callback) {
+    if (!mConnected) {
+        callback(false, DbResult::Error);
+        return;
+    }
+    const uint32_t requestId = nextRequestId();
+    std::vector<uint8_t> payload;
+    ByteWriter writer(payload);
+    writer.u32(requestId);
+    writer.string(username);
+    writer.u8(level);
+    mStream->send(static_cast<uint16_t>(DbMessage::AccountSetLevelRequest), payload);
+
+    registerHandler(requestId,
+            [callback](bool ok, uint16_t type, const std::vector<uint8_t>& data) {
+                if (!ok || type != static_cast<uint16_t>(DbMessage::AccountSetLevelResponse)) {
                     callback(false, DbResult::Error);
                     return;
                 }
@@ -221,6 +279,7 @@ void DbClient::lookupSession(const std::string& token,
                 result.found = reader.u8() != 0;
                 result.accountId = reader.u64();
                 result.username = reader.string();
+                result.permissionLevel = reader.u8();
                 callback(!reader.failed(), result);
             });
 }

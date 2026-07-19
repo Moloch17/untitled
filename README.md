@@ -162,8 +162,13 @@ a PostgreSQL you provide yourself, with `server/sql/schema.sql` already applied:
     DB_SERVER_HOST=localhost ./build/bin/worldserver
 
 Ports default to 7000 (dbserver), 7001 (authserver) and 7002/7003 TCP/UDP
-(worldserver). `DAY_LENGTH_SECONDS` on the world server sets how long one
-day/night cycle takes, 60 by default; see `compose.yaml` for every variable.
+(worldserver).
+
+The world clock follows the server's local wall-clock time, so in-game noon is
+real noon. Compose mounts `/etc/localtime` into the world server for that;
+without it a container runs on UTC. Set `DAY_LENGTH_SECONDS` to run an
+accelerated cycle instead (60 gives a one-minute day, which is what you want
+when working on the lighting). See `compose.yaml` for every variable.
 
 ## Updating dependencies
 

@@ -7,15 +7,18 @@ struct pg_conn;
 
 namespace db {
 
+// Mirrors net::PermissionLevel.
 struct Account {
     uint64_t id = 0;
     std::string username;
     std::string passwordHash;
+    uint8_t permissionLevel = 0;
 };
 
 struct Session {
     uint64_t accountId = 0;
     std::string username;
+    uint8_t permissionLevel = 0;
 };
 
 // Thin libpq wrapper. Every query is parameterised -- values are never pasted
@@ -30,6 +33,9 @@ public:
     // conninfo is a libpq connection string, e.g.
     // "host=postgres port=5432 dbname=untitled user=untitled password=..."
     bool connect(const std::string& conninfo);
+    // Brings an existing database up to date. schema.sql only runs on a fresh
+    // volume, so additive changes have to be applied here too.
+    bool migrate();
     void disconnect();
 
     // Reconnects if the connection dropped. Returns false if it's still down.
@@ -41,6 +47,10 @@ public:
     bool touchLastLogin(uint64_t accountId);
     // Sessions are removed with the account by the FK's ON DELETE CASCADE.
     bool deleteAccount(const std::string& username, bool* found);
+    bool setPermissionLevel(const std::string& username, uint8_t level, bool* found);
+    // True if any account has admin rights; used to decide whether the
+    // bootstrap account is needed.
+    bool hasAdmin(bool* exists);
 
     bool createSession(uint64_t accountId, const std::string& token, uint32_t ttlSeconds);
     bool lookupSession(const std::string& token, Session* out, bool* found);

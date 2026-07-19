@@ -7,7 +7,7 @@ namespace net {
 // Bump whenever the wire format changes incompatibly. Both ends check it during
 // the handshake so a stale client fails with a clear error instead of decoding
 // garbage.
-constexpr uint32_t kProtocolVersion = 4;
+constexpr uint32_t kProtocolVersion = 6;
 
 // Tags the first four bytes of every UDP datagram. UDP sockets receive whatever
 // the internet sends them; this discards obvious noise before parsing.
@@ -17,22 +17,35 @@ constexpr uint32_t kUdpMagic = 0x554E5431;  // "UNT1"
 // client extrapolates between them.
 constexpr int kServerTickHz = 60;
 
+// What an account is allowed to do. Every privileged action is authorised
+// against the level on the account behind the caller's session, so there is no
+// shared secret to leak, and every action is attributable to a person.
+enum class PermissionLevel : uint8_t {
+    Player = 0,
+    GameMaster = 1,
+    Admin = 2,
+};
+
 // ---------------------------------------------------------------------------
 // Client <-> auth server (TCP)
 // ---------------------------------------------------------------------------
 enum class AuthMessage : uint16_t {
     LoginRequest = 1,   // {version:u32, username:str, password:str}
-    LoginResponse = 2,  // {result:u8, token:str, worldHost:str, worldPort:u16, accountId:u64}
+    // {result:u8, token:str, worldHost:str, worldPort:u16, accountId:u64,
+    //  permissionLevel:u8}
+    LoginResponse = 2,
     RegisterRequest = 3,
     RegisterResponse = 4,
 
-    // Administrative commands, used by the `admin` tool. These are gated on a
-    // shared secret (ADMIN_SECRET) rather than an account, because they act on
-    // accounts and must work before any account exists.
-    AdminAccountCreateRequest = 5,   // {secret:str, username:str, password:str}
+    // Administrative commands from the console. Each carries the caller's
+    // session token; the server resolves it to an account and checks that
+    // account's permission level.
+    AdminAccountCreateRequest = 5,   // {token:str, username:str, password:str, level:u8}
     AdminAccountCreateResponse = 6,  // {result:u8}
-    AdminAccountDeleteRequest = 7,   // {secret:str, username:str}
+    AdminAccountDeleteRequest = 7,   // {token:str, username:str}
     AdminAccountDeleteResponse = 8,  // {result:u8}
+    AdminSetLevelRequest = 9,        // {token:str, username:str, level:u8}
+    AdminSetLevelResponse = 10,      // {result:u8}
 };
 
 enum class AuthResult : uint8_t {
@@ -44,6 +57,10 @@ enum class AuthResult : uint8_t {
     MalformedRequest = 5,
     NotAuthorised = 6,
     NoSuchAccount = 7,
+    // The caller is who they say they are, but their account isn't allowed.
+    InsufficientPermission = 8,
+    // The session has expired or was already redeemed; log in again.
+    SessionExpired = 9,
 };
 
 const char* toString(AuthResult result);
@@ -57,17 +74,22 @@ const char* toString(AuthResult result);
 // ---------------------------------------------------------------------------
 enum class DbMessage : uint16_t {
     AccountLookupRequest = 100,   // {requestId:u32, username:str}
-    AccountLookupResponse = 101,  // {requestId:u32, found:u8, accountId:u64, passwordHash:str}
+    // {requestId:u32, found:u8, accountId:u64, passwordHash:str, level:u8}
+    AccountLookupResponse = 101,
     AccountCreateRequest = 102,   // {requestId:u32, username:str, passwordHash:str}
     AccountCreateResponse = 103,  // {requestId:u32, result:u8, accountId:u64}
     SessionCreateRequest = 104,   // {requestId:u32, accountId:u64, token:str, ttlSeconds:u32}
     SessionCreateResponse = 105,  // {requestId:u32, result:u8}
     SessionLookupRequest = 106,   // {requestId:u32, token:str}
-    SessionLookupResponse = 107,  // {requestId:u32, found:u8, accountId:u64, username:str}
+    // {requestId:u32, found:u8, accountId:u64, username:str, level:u8}
+    SessionLookupResponse = 107,
     SessionDeleteRequest = 108,   // {requestId:u32, token:str}
     SessionDeleteResponse = 109,  // {requestId:u32, result:u8}
     AccountDeleteRequest = 110,   // {requestId:u32, username:str}
     AccountDeleteResponse = 111,  // {requestId:u32, result:u8}
+    AccountSetLevelRequest = 112,   // {requestId:u32, username:str, level:u8}
+    AccountSetLevelResponse = 113,  // {requestId:u32, result:u8}
+    AccountCreateWithLevelRequest = 114,  // {requestId:u32, username:str, hash:str, level:u8}
 };
 
 enum class DbResult : uint8_t {
@@ -101,6 +123,19 @@ enum class WorldMessage : uint16_t {
     // The client sends intent, never position: movement is resolved by the
     // server's physics so a modified client can't teleport.
     ClientInput = 212,
+
+    // Administrative, from the console tool. Gated on ADMIN_SECRET like the
+    // auth server's equivalents, because they act on the running world.
+    AdminSetTimeRequest = 220,   // {token:str, mode:u8, timeOfDay:f32}
+    AdminSetTimeResponse = 221,  // {result:u8, timeOfDay:f32}
+    AdminStatusRequest = 222,    // {token:str}
+    AdminStatusResponse = 223,   // {result:u8, timeOfDay:f32, players:u16, tick:u32}
+};
+
+// How the world clock should run, for AdminSetTimeRequest.
+enum class TimeMode : uint8_t {
+    Set = 0,      // jump to the given time and carry on from there
+    FollowReal = 1,  // drop any offset and track the wall clock again
 };
 
 enum class JoinResult : uint8_t {

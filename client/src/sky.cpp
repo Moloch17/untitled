@@ -17,11 +17,17 @@ constexpr float kArcAzimuth = 0.6f;
 // Peak brightness at noon, and the far dimmer moonlit night.
 constexpr float kSunIntensity = 100000.0f;
 constexpr float kMoonIntensity = 9000.0f;
-constexpr float kDayAmbient = 30000.0f;
+constexpr float kDayAmbient = 42000.0f;
 // Night is lit well above black on purpose. A scene the player cannot read is
 // not atmospheric, it is broken, so this is the floor the ambient never goes
 // below rather than a value it passes through.
-constexpr float kNightAmbient = 9000.0f;
+constexpr float kNightAmbient = 15000.0f;
+// Extra fill through dawn and dusk. Those are the harshest moments of the day
+// for shadows: the sun is still strong enough to throw long ones but low
+// enough that everything it misses gets only ambient, so shadowed ground can
+// end up darker than it is at night. This lifts the floor exactly when the
+// contrast is worst.
+constexpr float kTwilightAmbientBoost = 14000.0f;
 
 const float3 kNoonLight{1.0f, 0.96f, 0.90f};
 const float3 kHorizonLight{1.0f, 0.52f, 0.26f};
@@ -90,7 +96,8 @@ SkyState evaluateSky(float timeOfDay) {
     // Warm the sky through dawn and dusk, strongest right at the horizon.
     sky.skyColor = mix(sky.skyColor, kTwilightSky, horizonCloseness * 0.75f);
 
-    sky.ambientIntensity = kNightAmbient + (kDayAmbient - kNightAmbient) * dayAmount;
+    sky.ambientIntensity = kNightAmbient + (kDayAmbient - kNightAmbient) * dayAmount
+            + kTwilightAmbientBoost * horizonCloseness;
     // Belt and braces: whatever the curve does above, never let it fall to a
     // level where the world reads as black.
     if (sky.ambientIntensity < kNightAmbient) {

@@ -25,7 +25,8 @@ using PlayerInput = gamesim::CharacterInput;
 // place itself anywhere the server didn't agree to.
 class Simulation {
 public:
-    // dayLengthSeconds is how long one full day/night cycle takes.
+    // dayLengthSeconds is how long one full day/night cycle takes. Zero or
+    // less follows the wall clock instead, so in-game noon is real noon.
     void init(float dayLengthSeconds);
     void shutdown();
 
@@ -41,6 +42,13 @@ public:
 
     uint32_t tick() const { return mTick; }
     float timeOfDay() const { return mTimeOfDay; }
+    size_t playerCount() const { return mPlayers.size(); }
+
+    // Jumps the world clock. In wall-clock mode this is stored as an offset, so
+    // time keeps advancing from where it was set rather than freezing.
+    void setTimeOfDay(float timeOfDay);
+    // Drops any offset and follows real time again.
+    void followRealTime();
 
 private:
     struct Player {
@@ -67,7 +75,10 @@ private:
 
     // Wraps in [0,1). Starts at morning so a fresh server isn't pitch black.
     float mTimeOfDay = 0.3f;
-    float mDayLengthSeconds = 60.0f;
+    // Zero or less means "follow the wall clock".
+    float mDayLengthSeconds = 0.0f;
+    // Added to wall-clock time, wrapped. Set by the console.
+    float mTimeOffset = 0.0f;
 };
 
 }  // namespace world

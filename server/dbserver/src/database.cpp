@@ -68,6 +68,56 @@ bool Database::ensureConnected() {
     return connect(mConninfo);
 }
 
+bool Database::migrate() {
+    if (!ensureConnected()) {
+        return false;
+    }
+    // Idempotent: safe to run on every start, including on a database created
+    // before permission levels existed.
+    const Result result(PQexec(mConnection,
+            "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS permission_level "
+            "SMALLINT NOT NULL DEFAULT 0"));
+    if (result.status() != PGRES_COMMAND_OK) {
+        mLastError = PQerrorMessage(mConnection);
+        return false;
+    }
+    return true;
+}
+
+bool Database::setPermissionLevel(const std::string& username, uint8_t level, bool* found) {
+    *found = false;
+    if (!ensureConnected()) {
+        return false;
+    }
+    const std::string levelText = std::to_string(static_cast<int>(level));
+    const char* values[] = {levelText.c_str(), username.c_str()};
+    const Result result(PQexecParams(mConnection,
+            "UPDATE accounts SET permission_level = $1 "
+            "WHERE lower(username) = lower($2) RETURNING id",
+            2, nullptr, values, nullptr, nullptr, 0));
+    if (result.status() != PGRES_TUPLES_OK) {
+        mLastError = PQerrorMessage(mConnection);
+        return false;
+    }
+    *found = result.rows() > 0;
+    return true;
+}
+
+bool Database::hasAdmin(bool* exists) {
+    *exists = false;
+    if (!ensureConnected()) {
+        return false;
+    }
+    const Result result(PQexec(mConnection,
+            "SELECT 1 FROM accounts WHERE permission_level >= 2 LIMIT 1"));
+    if (result.status() != PGRES_TUPLES_OK) {
+        mLastError = PQerrorMessage(mConnection);
+        return false;
+    }
+    *exists = result.rows() > 0;
+    return true;
+}
+
 bool Database::findAccount(const std::string& username, Account* out, bool* found) {
     *found = false;
     if (!ensureConnected()) {
@@ -76,7 +126,8 @@ bool Database::findAccount(const std::string& username, Account* out, bool* foun
 
     const char* values[] = {username.c_str()};
     const Result result(PQexecParams(mConnection,
-            "SELECT id, username, password_hash FROM accounts WHERE lower(username) = lower($1)",
+            "SELECT id, username, password_hash, permission_level FROM accounts "
+            "WHERE lower(username) = lower($1)",
             1, nullptr, values, nullptr, nullptr, 0));
 
     if (result.status() != PGRES_TUPLES_OK) {
@@ -90,6 +141,7 @@ bool Database::findAccount(const std::string& username, Account* out, bool* foun
     out->id = toUint64(result.value(0, 0));
     out->username = result.value(0, 1);
     out->passwordHash = result.value(0, 2);
+    out->permissionLevel = static_cast<uint8_t>(std::atoi(result.value(0, 3)));
     *found = true;
     return true;
 }
@@ -186,7 +238,7 @@ bool Database::lookupSession(const std::string& token, Session* out, bool* found
     const char* values[] = {token.c_str()};
     // Expiry is enforced in the query so a stale row can never authorise a join.
     const Result result(PQexecParams(mConnection,
-            "SELECT s.account_id, a.username FROM sessions s "
+            "SELECT s.account_id, a.username, a.permission_level FROM sessions s "
             "JOIN accounts a ON a.id = s.account_id "
             "WHERE s.token = $1 AND s.expires_at > now()",
             1, nullptr, values, nullptr, nullptr, 0));
@@ -201,6 +253,7 @@ bool Database::lookupSession(const std::string& token, Session* out, bool* found
 
     out->accountId = toUint64(result.value(0, 0));
     out->username = result.value(0, 1);
+    out->permissionLevel = static_cast<uint8_t>(std::atoi(result.value(0, 2)));
     *found = true;
     return true;
 }

@@ -82,7 +82,7 @@ bool validUsername(const std::string& username) {
 
 void sendLoginResponse(serverutil::TcpServer& server, serverutil::TcpServer::ConnectionId id,
         AuthResult result, const std::string& token, const std::string& worldHost,
-        uint16_t worldPort, uint64_t accountId) {
+        uint16_t worldPort, uint64_t accountId, uint8_t permissionLevel) {
     std::vector<uint8_t> payload;
     ByteWriter writer(payload);
     writer.u8(static_cast<uint8_t>(result));
@@ -90,22 +90,8 @@ void sendLoginResponse(serverutil::TcpServer& server, serverutil::TcpServer::Con
     writer.string(worldHost);
     writer.u16(worldPort);
     writer.u64(accountId);
+    writer.u8(permissionLevel);
     server.send(id, static_cast<uint16_t>(AuthMessage::LoginResponse), payload);
-}
-
-// Compared without an early exit so timing can't reveal a prefix of the secret.
-bool secretMatches(const std::string& expected, const std::string& supplied) {
-    if (expected.empty()) {
-        return false;  // unset secret disables admin commands entirely
-    }
-    if (expected.size() != supplied.size()) {
-        return false;
-    }
-    unsigned char difference = 0;
-    for (size_t i = 0; i < expected.size(); ++i) {
-        difference |= static_cast<unsigned char>(expected[i] ^ supplied[i]);
-    }
-    return difference == 0;
 }
 
 void sendAdminResponse(serverutil::TcpServer& server, serverutil::TcpServer::ConnectionId id,
@@ -150,11 +136,12 @@ int main() {
     const std::string worldHost = serverutil::envString("WORLD_PUBLIC_HOST", "127.0.0.1");
     const uint16_t worldPort = serverutil::envPort("WORLD_SERVER_PORT", 7002);
     const uint32_t sessionTtl = serverutil::envUint("SESSION_TTL_SECONDS", 120);
-    // Admin commands are refused outright when this is unset.
-    const std::string adminSecret = serverutil::envString("ADMIN_SECRET", "");
-    if (adminSecret.empty()) {
-        log.warn("ADMIN_SECRET is not set; admin commands are disabled");
-    }
+
+    // Optional first-run bootstrap: BOOTSTRAP_ADMIN=name:password gives that
+    // account admin rights if -- and only if -- no admin exists yet. Without
+    // it a fresh database has no way to grant the first privilege, since every
+    // privileged action requires an already-privileged account.
+    const std::string bootstrap = serverutil::envString("BOOTSTRAP_ADMIN", "");
 
     serverutil::DbClient dbClient;
     for (int attempt = 1; gRunning; ++attempt) {
@@ -168,6 +155,39 @@ int main() {
         return 0;
     }
     log.info("connected to database server at %s:%u", dbHost.c_str(), dbPort);
+
+    // Apply the bootstrap before serving. It is a no-op once any admin exists,
+    // so leaving it set is harmless.
+    if (!bootstrap.empty()) {
+        const size_t colon = bootstrap.find(':');
+        if (colon == std::string::npos) {
+            log.warn("BOOTSTRAP_ADMIN should look like name:password");
+        } else {
+            const std::string name = bootstrap.substr(0, colon);
+            const std::string password = bootstrap.substr(colon + 1);
+            std::string hash;
+            if (validUsername(name) && password.size() >= kMinPasswordLength
+                    && hashPassword(password, &hash)) {
+                // Create if missing, then promote. Both are idempotent, so a
+                // restart with the same value changes nothing.
+                dbClient.createAccountWithLevel(name, hash,
+                        static_cast<uint8_t>(PermissionLevel::Admin),
+                        [](bool, DbResult, uint64_t) {});
+                dbClient.setPermissionLevel(name, static_cast<uint8_t>(PermissionLevel::Admin),
+                        [name](bool ok, DbResult result) {
+                            if (ok && result == DbResult::Ok) {
+                                log.info("bootstrap: '%s' has admin rights", name.c_str());
+                            }
+                        });
+                for (int i = 0; i < 40; ++i) {
+                    dbClient.poll();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                }
+            } else {
+                log.warn("BOOTSTRAP_ADMIN rejected: bad username or short password");
+            }
+        }
+    }
 
     serverutil::TcpServer server;
     if (!server.listen(listenPort)) {
@@ -191,13 +211,13 @@ int main() {
                 const std::string username = reader.string();
                 const std::string password = reader.string();
                 if (reader.failed()) {
-                    sendLoginResponse(server, id, AuthResult::MalformedRequest, "", "", 0, 0);
+                    sendLoginResponse(server, id, AuthResult::MalformedRequest, "", "", 0, 0, 0);
                     return;
                 }
                 if (version != kProtocolVersion) {
                     log.warn("rejecting client with protocol version %u (expected %u)", version,
                             kProtocolVersion);
-                    sendLoginResponse(server, id, AuthResult::VersionMismatch, "", "", 0, 0);
+                    sendLoginResponse(server, id, AuthResult::VersionMismatch, "", "", 0, 0, 0);
                     return;
                 }
 
@@ -208,8 +228,7 @@ int main() {
                                                             account) {
                             if (!ok) {
                                 log.error("account lookup failed for '%s'", username.c_str());
-                                sendLoginResponse(server, id, AuthResult::ServerError, "", "", 0,
-                                        0);
+                                sendLoginResponse(server, id, AuthResult::ServerError, "", "", 0, 0, 0);
                                 return;
                             }
 
@@ -218,28 +237,28 @@ int main() {
                             // enumerate valid usernames.
                             if (!account.found || !verifyPassword(account.passwordHash, password)) {
                                 log.info("login failed for '%s'", username.c_str());
-                                sendLoginResponse(server, id, AuthResult::InvalidCredentials, "",
-                                        "", 0, 0);
+                                sendLoginResponse(server, id, AuthResult::InvalidCredentials, "", "", 0, 0, 0);
                                 return;
                             }
 
                             const std::string token = generateToken();
                             dbClient.createSession(account.accountId, token, sessionTtl,
                                     [&server, id, token, worldHost, worldPort, username,
-                                            accountId = account.accountId](bool sessionOk,
+                                            accountId = account.accountId,
+                                            level = account.permissionLevel](bool sessionOk,
                                             DbResult result) {
                                         if (!sessionOk || result != DbResult::Ok) {
                                             log.error("failed to create session for '%s'",
                                                     username.c_str());
                                             sendLoginResponse(server, id, AuthResult::ServerError,
-                                                    "", "", 0, 0);
+                                                    "", "", 0, 0, 0);
                                             return;
                                         }
                                         log.info("login succeeded for '%s' (account %llu)",
                                                 username.c_str(),
                                                 static_cast<unsigned long long>(accountId));
                                         sendLoginResponse(server, id, AuthResult::Success, token,
-                                                worldHost, worldPort, accountId);
+                                                worldHost, worldPort, accountId, level);
                                     });
                         });
                 break;
@@ -286,90 +305,134 @@ int main() {
                 break;
             }
 
-            case AuthMessage::AdminAccountCreateRequest: {
-                const std::string secret = reader.string();
-                const std::string username = reader.string();
-                const std::string password = reader.string();
-                if (reader.failed()) {
-                    sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
-                            AuthResult::MalformedRequest);
-                    return;
-                }
-                if (!secretMatches(adminSecret, secret)) {
-                    log.warn("rejected admin account-create with a bad secret");
-                    sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
-                            AuthResult::NotAuthorised);
-                    return;
-                }
-                if (!validUsername(username) || password.size() < kMinPasswordLength) {
-                    sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
-                            AuthResult::MalformedRequest);
+            case AuthMessage::AdminAccountCreateRequest:
+            case AuthMessage::AdminAccountDeleteRequest:
+            case AuthMessage::AdminSetLevelRequest: {
+                // Every privileged command is authorised the same way: resolve
+                // the caller's session to an account and check that account's
+                // permission level. No shared secret exists to leak, and the
+                // log names who did what.
+                const auto command = static_cast<AuthMessage>(type);
+                const std::string token = reader.string();
+                const std::string target = reader.string();
+                const std::string password =
+                        command == AuthMessage::AdminAccountCreateRequest ? reader.string() : "";
+                const uint8_t level = (command == AuthMessage::AdminAccountCreateRequest
+                                              || command == AuthMessage::AdminSetLevelRequest)
+                        ? reader.u8()
+                        : 0;
+
+                const AuthMessage responseType =
+                        command == AuthMessage::AdminAccountCreateRequest
+                        ? AuthMessage::AdminAccountCreateResponse
+                        : (command == AuthMessage::AdminAccountDeleteRequest
+                                          ? AuthMessage::AdminAccountDeleteResponse
+                                          : AuthMessage::AdminSetLevelResponse);
+
+                if (reader.failed() || target.empty()) {
+                    sendAdminResponse(server, id, responseType, AuthResult::MalformedRequest);
                     return;
                 }
 
-                std::string hash;
-                if (!hashPassword(password, &hash)) {
-                    sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
-                            AuthResult::ServerError);
-                    return;
-                }
-
-                // Async: the reply goes out from the callback, so the event
-                // loop keeps serving logins while Postgres works.
-                dbClient.createAccount(username, hash,
-                        [&server, id, username](bool ok, DbResult result, uint64_t accountId) {
+                dbClient.lookupSession(token,
+                        [&server, &dbClient, id, command, responseType, target, password, level](
+                                bool ok, const serverutil::DbClient::SessionLookup& session) {
                             if (!ok) {
-                                sendAdminResponse(server, id,
-                                        AuthMessage::AdminAccountCreateResponse,
+                                sendAdminResponse(server, id, responseType,
                                         AuthResult::ServerError);
                                 return;
                             }
-                            if (result == DbResult::Conflict) {
-                                sendAdminResponse(server, id,
-                                        AuthMessage::AdminAccountCreateResponse,
-                                        AuthResult::AccountExists);
+                            if (!session.found) {
+                                sendAdminResponse(server, id, responseType,
+                                        AuthResult::SessionExpired);
                                 return;
                             }
-                            log.info("admin created account '%s' (id %llu)", username.c_str(),
-                                    static_cast<unsigned long long>(accountId));
-                            sendAdminResponse(server, id, AuthMessage::AdminAccountCreateResponse,
-                                    AuthResult::Success);
-                        });
-                break;
-            }
+                            // Account management is admin-only.
+                            if (session.permissionLevel
+                                    < static_cast<uint8_t>(PermissionLevel::Admin)) {
+                                log.warn("'%s' (level %u) attempted an admin command",
+                                        session.username.c_str(), session.permissionLevel);
+                                sendAdminResponse(server, id, responseType,
+                                        AuthResult::InsufficientPermission);
+                                return;
+                            }
 
-            case AuthMessage::AdminAccountDeleteRequest: {
-                const std::string secret = reader.string();
-                const std::string username = reader.string();
-                if (reader.failed()) {
-                    sendAdminResponse(server, id, AuthMessage::AdminAccountDeleteResponse,
-                            AuthResult::MalformedRequest);
-                    return;
-                }
-                if (!secretMatches(adminSecret, secret)) {
-                    log.warn("rejected admin account-delete with a bad secret");
-                    sendAdminResponse(server, id, AuthMessage::AdminAccountDeleteResponse,
-                            AuthResult::NotAuthorised);
-                    return;
-                }
-
-                dbClient.deleteAccount(username,
-                        [&server, id, username](bool ok, DbResult result) {
-                            if (!ok) {
-                                sendAdminResponse(server, id,
-                                        AuthMessage::AdminAccountDeleteResponse,
-                                        AuthResult::ServerError);
-                                return;
+                            const std::string actor = session.username;
+                            if (command == AuthMessage::AdminAccountCreateRequest) {
+                                if (!validUsername(target) || password.size() < kMinPasswordLength
+                                        || level > static_cast<uint8_t>(PermissionLevel::Admin)) {
+                                    sendAdminResponse(server, id, responseType,
+                                            AuthResult::MalformedRequest);
+                                    return;
+                                }
+                                std::string hash;
+                                if (!hashPassword(password, &hash)) {
+                                    sendAdminResponse(server, id, responseType,
+                                            AuthResult::ServerError);
+                                    return;
+                                }
+                                dbClient.createAccountWithLevel(target, hash, level,
+                                        [&server, id, responseType, target, level, actor](
+                                                bool created, DbResult result, uint64_t) {
+                                            if (!created) {
+                                                sendAdminResponse(server, id, responseType,
+                                                        AuthResult::ServerError);
+                                                return;
+                                            }
+                                            if (result == DbResult::Conflict) {
+                                                sendAdminResponse(server, id, responseType,
+                                                        AuthResult::AccountExists);
+                                                return;
+                                            }
+                                            log.info("%s created account '%s' at level %u",
+                                                    actor.c_str(), target.c_str(), level);
+                                            sendAdminResponse(server, id, responseType,
+                                                    AuthResult::Success);
+                                        });
+                            } else if (command == AuthMessage::AdminAccountDeleteRequest) {
+                                dbClient.deleteAccount(target,
+                                        [&server, id, responseType, target, actor](
+                                                bool deleted, DbResult result) {
+                                            if (!deleted) {
+                                                sendAdminResponse(server, id, responseType,
+                                                        AuthResult::ServerError);
+                                                return;
+                                            }
+                                            if (result == DbResult::NotFound) {
+                                                sendAdminResponse(server, id, responseType,
+                                                        AuthResult::NoSuchAccount);
+                                                return;
+                                            }
+                                            log.info("%s deleted account '%s'", actor.c_str(),
+                                                    target.c_str());
+                                            sendAdminResponse(server, id, responseType,
+                                                    AuthResult::Success);
+                                        });
+                            } else {
+                                if (level > static_cast<uint8_t>(PermissionLevel::Admin)) {
+                                    sendAdminResponse(server, id, responseType,
+                                            AuthResult::MalformedRequest);
+                                    return;
+                                }
+                                dbClient.setPermissionLevel(target, level,
+                                        [&server, id, responseType, target, level, actor](
+                                                bool set, DbResult result) {
+                                            if (!set) {
+                                                sendAdminResponse(server, id, responseType,
+                                                        AuthResult::ServerError);
+                                                return;
+                                            }
+                                            if (result == DbResult::NotFound) {
+                                                sendAdminResponse(server, id, responseType,
+                                                        AuthResult::NoSuchAccount);
+                                                return;
+                                            }
+                                            log.info("%s set '%s' to level %u", actor.c_str(),
+                                                    target.c_str(), level);
+                                            sendAdminResponse(server, id, responseType,
+                                                    AuthResult::Success);
+                                        });
                             }
-                            if (result == DbResult::NotFound) {
-                                sendAdminResponse(server, id,
-                                        AuthMessage::AdminAccountDeleteResponse,
-                                        AuthResult::NoSuchAccount);
-                                return;
-                            }
-                            log.info("admin deleted account '%s'", username.c_str());
-                            sendAdminResponse(server, id, AuthMessage::AdminAccountDeleteResponse,
-                                    AuthResult::Success);
                         });
                 break;
             }

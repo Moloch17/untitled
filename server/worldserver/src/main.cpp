@@ -104,6 +104,7 @@ int main() {
     const uint16_t dbPort = serverutil::envPort("DB_SERVER_PORT", 7000);
     const uint32_t udpTimeoutSeconds = serverutil::envUint("UDP_TIMEOUT_SECONDS", 30);
 
+
     serverutil::DbClient dbClient;
     for (int attempt = 1; gRunning; ++attempt) {
         if (dbClient.connect(dbHost, dbPort)) {
@@ -130,13 +131,18 @@ int main() {
     }
     gLog.info("listening on TCP %u / UDP %u, ticking at %d Hz", tcpPort, udpPort, kServerTickHz);
 
-    // One full day/night cycle. Short by default: a 60-second day makes the
-    // cycle observable while testing instead of something you wait an hour for.
-    const uint32_t dayLength = serverutil::envUint("DAY_LENGTH_SECONDS", 60);
+    // Unset (or zero) means the world clock follows real time, so in-game noon
+    // is real noon. Setting it gives an accelerated cycle, which is what you
+    // want to watch a whole day pass while testing.
+    const uint32_t dayLength = serverutil::envUint("DAY_LENGTH_SECONDS", 0);
 
     world::Simulation simulation;
     simulation.init(static_cast<float>(dayLength));
-    gLog.info("day length is %u seconds", dayLength);
+    if (dayLength > 0) {
+        gLog.info("day length is %u seconds (accelerated)", dayLength);
+    } else {
+        gLog.info("world clock follows local wall-clock time");
+    }
 
     std::map<TcpServer::ConnectionId, Player> playersByConnection;
     std::map<uint64_t, TcpServer::ConnectionId> connectionByPlayer;
@@ -230,6 +236,70 @@ int main() {
                             // so remove it. A stolen token can't be replayed to
                             // open a second session.
                             dbClient.deleteSession(token, [](bool, DbResult) {});
+                        });
+                break;
+            }
+
+            case WorldMessage::AdminSetTimeRequest:
+            case WorldMessage::AdminStatusRequest: {
+                // Authorised the same way as the auth server's commands: the
+                // caller's session names an account, and that account's level
+                // decides. Controlling the world clock is a game-master power.
+                const auto command = static_cast<WorldMessage>(type);
+                const std::string token = reader.string();
+                const auto mode = command == WorldMessage::AdminSetTimeRequest
+                        ? static_cast<TimeMode>(reader.u8())
+                        : TimeMode::Set;
+                const float requested =
+                        command == WorldMessage::AdminSetTimeRequest ? reader.f32() : 0.0f;
+
+                const WorldMessage responseType = command == WorldMessage::AdminSetTimeRequest
+                        ? WorldMessage::AdminSetTimeResponse
+                        : WorldMessage::AdminStatusResponse;
+
+                const auto reply = [&server, id, responseType, &simulation](uint8_t result) {
+                    std::vector<uint8_t> payload;
+                    ByteWriter writer(payload);
+                    writer.u8(result);
+                    writer.f32(simulation.timeOfDay());
+                    if (responseType == WorldMessage::AdminStatusResponse) {
+                        writer.u16(static_cast<uint16_t>(simulation.playerCount()));
+                        writer.u32(simulation.tick());
+                    }
+                    server.send(id, static_cast<uint16_t>(responseType), payload);
+                };
+
+                if (reader.failed()) {
+                    reply(1);
+                    return;
+                }
+
+                dbClient.lookupSession(token,
+                        [&simulation, command, mode, requested, reply](bool ok,
+                                const serverutil::DbClient::SessionLookup& session) {
+                            if (!ok || !session.found) {
+                                reply(1);
+                                return;
+                            }
+                            if (session.permissionLevel
+                                    < static_cast<uint8_t>(PermissionLevel::GameMaster)) {
+                                gLog.warn("'%s' (level %u) attempted a world command",
+                                        session.username.c_str(), session.permissionLevel);
+                                reply(2);
+                                return;
+                            }
+                            if (command == WorldMessage::AdminSetTimeRequest) {
+                                if (mode == TimeMode::FollowReal) {
+                                    simulation.followRealTime();
+                                    gLog.info("%s set the world clock to follow real time",
+                                            session.username.c_str());
+                                } else {
+                                    simulation.setTimeOfDay(requested);
+                                    gLog.info("%s set the world clock to %.4f",
+                                            session.username.c_str(), requested);
+                                }
+                            }
+                            reply(0);
                         });
                 break;
             }

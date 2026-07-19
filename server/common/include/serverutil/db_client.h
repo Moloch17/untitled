@@ -23,12 +23,14 @@ public:
         bool found = false;
         uint64_t accountId = 0;
         std::string passwordHash;
+        uint8_t permissionLevel = 0;
     };
 
     struct SessionLookup {
         bool found = false;
         uint64_t accountId = 0;
         std::string username;
+        uint8_t permissionLevel = 0;
     };
 
     bool connect(const std::string& host, uint16_t port);
@@ -45,6 +47,10 @@ public:
     void createAccount(const std::string& username, const std::string& passwordHash,
             std::function<void(bool ok, net::DbResult, uint64_t accountId)> callback);
     void deleteAccount(const std::string& username,
+            std::function<void(bool ok, net::DbResult)> callback);
+    void createAccountWithLevel(const std::string& username, const std::string& passwordHash,
+            uint8_t level, std::function<void(bool ok, net::DbResult, uint64_t)> callback);
+    void setPermissionLevel(const std::string& username, uint8_t level,
             std::function<void(bool ok, net::DbResult)> callback);
     void createSession(uint64_t accountId, const std::string& token, uint32_t ttlSeconds,
             std::function<void(bool ok, net::DbResult)> callback);

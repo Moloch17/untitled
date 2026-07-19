@@ -59,10 +59,9 @@ target_link_libraries(worldserver PRIVATE serverutil gamesim)
 add_executable(authserver authserver/src/main.cpp)
 target_link_libraries(authserver PRIVATE serverutil ${SODIUM_TARGET})
 
-# Account administration. Interactive confirmation lives here, in a separate
-# process, so it can never block a server's tick loop.
-add_executable(admin tools/src/admin.cpp)
-target_link_libraries(admin PRIVATE serverutil)
+# Interactive server console: account management and world clock control.
+add_executable(console tools/src/console.cpp)
+target_link_libraries(console PRIVATE serverutil)
 
 # Test tool for exercising auth without the game client.
 add_executable(authcli tools/src/authcli.cpp)

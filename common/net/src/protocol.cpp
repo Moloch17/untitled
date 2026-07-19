@@ -12,6 +12,8 @@ const char* toString(AuthResult result) {
         case AuthResult::MalformedRequest: return "malformed request";
         case AuthResult::NotAuthorised: return "not authorised (bad admin secret)";
         case AuthResult::NoSuchAccount: return "no such account";
+        case AuthResult::InsufficientPermission: return "your account lacks permission";
+        case AuthResult::SessionExpired: return "session expired -- log in again";
     }
     return "unknown";
 }

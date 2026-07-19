@@ -10,7 +10,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- parameters and salt, so no separate salt column is needed.
     password_hash TEXT NOT NULL,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_login_at TIMESTAMPTZ
+    last_login_at TIMESTAMPTZ,
+    -- 0 player, 1 game master, 2 admin. Every privileged action is authorised
+    -- against this, so there is no shared secret to leak or rotate.
+    permission_level SMALLINT NOT NULL DEFAULT 0
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_lower_idx ON accounts (lower(username));
