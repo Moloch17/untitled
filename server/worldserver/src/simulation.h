@@ -25,9 +25,9 @@ using PlayerInput = gamesim::CharacterInput;
 // place itself anywhere the server didn't agree to.
 class Simulation {
 public:
-    // dayLengthSeconds is how long one full day/night cycle takes. Zero or
-    // less follows the wall clock instead, so in-game noon is real noon.
-    void init(float dayLengthSeconds);
+    // timeSpeed is how fast the world clock runs relative to real time: 1 is
+    // real time, so in-game noon is real noon; 24 gives a one hour day.
+    void init(float timeSpeed);
     void shutdown();
 
     // Adds a player capsule at a spawn point. Returns its entity id.
@@ -44,11 +44,13 @@ public:
     float timeOfDay() const { return mTimeOfDay; }
     size_t playerCount() const { return mPlayers.size(); }
 
-    // Jumps the world clock. In wall-clock mode this is stored as an offset, so
-    // time keeps advancing from where it was set rather than freezing.
+    // Jumps the world clock, which then keeps running from there.
     void setTimeOfDay(float timeOfDay);
-    // Drops any offset and follows real time again.
-    void followRealTime();
+    // How fast the clock runs relative to real time. 1 is real time, 0 freezes.
+    void setTimeSpeed(float speed);
+    float timeSpeed() const { return mTimeSpeed; }
+    // Back to defaults: real time of day, running at real speed.
+    void resetClock();
 
 private:
     struct Player {
@@ -73,12 +75,18 @@ private:
     uint32_t mTick = 0;
     double mElapsed = 0.0;
 
-    // Wraps in [0,1). Starts at morning so a fresh server isn't pitch black.
+    // Wraps in [0,1).
     float mTimeOfDay = 0.3f;
-    // Zero or less means "follow the wall clock".
-    float mDayLengthSeconds = 0.0f;
-    // Added to wall-clock time, wrapped. Set by the console.
-    float mTimeOffset = 0.0f;
+
+    // The clock is an anchor plus a rate rather than an accumulator: world time
+    // is a function of how much real time has passed since the anchor. That
+    // keeps it exact across pauses and lets `speed` change without the clock
+    // jumping, since changing it re-anchors at the current time.
+    double mAnchorRealSeconds = 0.0;
+    float mAnchorTimeOfDay = 0.0f;
+    float mTimeSpeed = 1.0f;
+
+    void reanchor();
 };
 
 }  // namespace world

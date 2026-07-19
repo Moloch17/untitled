@@ -14,6 +14,14 @@
 // secret, and the servers log which account performed each action.
 
 #include <cstdio>
+
+#if defined(_WIN32)
+    #include <io.h>
+    #define isatty _isatty
+    #define fileno _fileno
+#else
+    #include <unistd.h>
+#endif
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -78,6 +86,9 @@ bool request(const std::string& host, uint16_t port, uint16_t type,
     return false;
 }
 
+bool login();
+void deleteBootstrapAccount();
+
 void accountCreate(const std::string& name, const std::string& password, uint8_t level) {
     std::vector<uint8_t> payload;
     ByteWriter writer(payload);
@@ -93,9 +104,48 @@ void accountCreate(const std::string& name, const std::string& password, uint8_t
     }
     ByteReader reader(reply.payload.data(), reply.payload.size());
     const auto result = static_cast<AuthResult>(reader.u8());
-    std::printf(result == AuthResult::Success ? "  created account '%s'\n"
-                                              : "  failed: %s\n",
-            result == AuthResult::Success ? name.c_str() : toString(result));
+    if (result != AuthResult::Success) {
+        std::printf("  failed: %s\n", toString(result));
+        return;
+    }
+    std::printf("  created account '%s'\n", name.c_str());
+
+    // Signed in as the bootstrap account, creating an account is the one thing
+    // it can do -- and having done it, it has no further purpose. Switch to the
+    // new admin and remove it, so a well-known password never outlives the
+    // setup it existed for.
+    if (gUser == kBootstrapAccount) {
+        gUser = name;
+        gPassword = password;
+        if (!login()) {
+            std::printf("  could not sign in as '%s'; the bootstrap account is still\n"
+                        "  present, so you can try again.\n", name.c_str());
+            return;
+        }
+        deleteBootstrapAccount();
+    }
+}
+
+// Removes the bootstrap account once a real admin has taken over. No prompt:
+// this is the tail end of the flow the operator already asked for.
+void deleteBootstrapAccount() {
+    std::vector<uint8_t> payload;
+    ByteWriter writer(payload);
+    writer.string(gToken);
+    writer.string(kBootstrapAccount);
+
+    MessageStream::Message reply;
+    if (!request(gAuthHost, gAuthPort,
+                static_cast<uint16_t>(AuthMessage::AdminAccountDeleteRequest), payload, &reply)) {
+        return;
+    }
+    ByteReader reader(reply.payload.data(), reply.payload.size());
+    const auto result = static_cast<AuthResult>(reader.u8());
+    if (result == AuthResult::Success) {
+        std::printf("  removed the '%s' account\n", kBootstrapAccount);
+    } else {
+        std::printf("  could not remove '%s': %s\n", kBootstrapAccount, toString(result));
+    }
 }
 
 void accountDelete(const std::string& name, bool assumeYes) {
@@ -148,12 +198,57 @@ void accountSetLevel(const std::string& name, uint8_t level) {
     }
 }
 
-void printClock(float timeOfDay) {
-    const int minutes = static_cast<int>(timeOfDay * 24.0f * 60.0f + 0.5f) % (24 * 60);
-    std::printf("  world clock is %02d:%02d (%.4f)\n", minutes / 60, minutes % 60, timeOfDay);
+void latencyCommand(bool set, uint32_t milliseconds) {
+    std::vector<uint8_t> payload;
+    ByteWriter writer(payload);
+    writer.string(gToken);
+    writer.u32(milliseconds);
+
+    MessageStream::Message reply;
+    if (!request(gWorldHost, gWorldPort,
+                static_cast<uint16_t>(WorldMessage::AdminSetLatencyRequest), payload, &reply)) {
+        return;
+    }
+    ByteReader reader(reply.payload.data(), reply.payload.size());
+    const uint8_t result = reader.u8();
+    const uint32_t current = reader.u32();
+    if (result == 2) {
+        std::printf("  refused: your account lacks permission (game master or higher)\n");
+        return;
+    }
+    if (result != 0) {
+        std::printf("  refused: session expired -- restart the console\n");
+        return;
+    }
+    (void) set;
+    if (current == 0) {
+        std::printf("  simulated latency off\n");
+    } else {
+        std::printf("  simulated latency %u ms each way (about %u ms round trip)\n", current,
+                current * 2);
+    }
 }
 
-// Accepts "20:30" or a bare fraction like "0.85".
+void printClock(float timeOfDay, float speed) {
+    const int minutes = static_cast<int>(timeOfDay * 24.0f * 60.0f + 0.5f) % (24 * 60);
+    std::printf("  world clock is %02d:%02d", minutes / 60, minutes % 60);
+    if (speed == 1.0f) {
+        std::printf(" (real time)\n");
+    } else if (speed == 0.0f) {
+        std::printf(" (frozen)\n");
+    } else {
+        // A day takes 24h / speed.
+        const float dayMinutes = 24.0f * 60.0f / speed;
+        if (dayMinutes >= 1.0f) {
+            std::printf(" (%.4gx real time, %.0f minute day)\n", speed, dayMinutes);
+        } else {
+            std::printf(" (%.4gx real time, %.0f second day)\n", speed, dayMinutes * 60.0f);
+        }
+    }
+}
+
+// 24 hour HH:MM. A bare fraction is also accepted, which is what the wire
+// format carries and is occasionally handy for scripting.
 bool parseTimeOfDay(const std::string& text, float* out) {
     const size_t colon = text.find(':');
     if (colon == std::string::npos) {
@@ -174,12 +269,12 @@ bool parseTimeOfDay(const std::string& text, float* out) {
     return true;
 }
 
-void timeCommand(TimeMode mode, float timeOfDay) {
+void timeCommand(TimeCommand command, float value) {
     std::vector<uint8_t> payload;
     ByteWriter writer(payload);
     writer.string(gToken);
-    writer.u8(static_cast<uint8_t>(mode));
-    writer.f32(timeOfDay);
+    writer.u8(static_cast<uint8_t>(command));
+    writer.f32(value);
 
     MessageStream::Message reply;
     if (!request(gWorldHost, gWorldPort,
@@ -189,6 +284,7 @@ void timeCommand(TimeMode mode, float timeOfDay) {
     ByteReader reader(reply.payload.data(), reply.payload.size());
     const uint8_t result = reader.u8();
     const float now = reader.f32();
+    const float speed = reader.f32();
     if (result == 2) {
         std::printf("  refused: your account lacks permission (game master or higher)\n");
         return;
@@ -197,7 +293,7 @@ void timeCommand(TimeMode mode, float timeOfDay) {
         std::printf("  refused: session expired -- restart the console\n");
         return;
     }
-    printClock(now);
+    printClock(now, speed);
 }
 
 void status() {
@@ -213,8 +309,10 @@ void status() {
     ByteReader reader(reply.payload.data(), reply.payload.size());
     const uint8_t result = reader.u8();
     const float timeOfDay = reader.f32();
+    const float speed = reader.f32();
     const uint16_t players = reader.u16();
     const uint32_t tick = reader.u32();
+    const uint32_t latencyMs = reader.u32();
     if (result == 2) {
         std::printf("  refused: your account lacks permission (game master or higher)\n");
         return;
@@ -223,8 +321,11 @@ void status() {
         std::printf("  refused: session expired -- restart the console\n");
         return;
     }
-    printClock(timeOfDay);
+    printClock(timeOfDay, speed);
     std::printf("  players online: %u\n  tick: %u\n", players, tick);
+    if (latencyMs > 0) {
+        std::printf("  simulated latency: %u ms each way\n", latencyMs);
+    }
 }
 
 // Authenticates and stores the session token used by every command below.
@@ -266,8 +367,11 @@ void help() {
             "  account delete <name> [--yes]              delete an account\n"
             "  account level <name> <0|1|2>               0 player, 1 gm, 2 admin\n"
             "  time                               show the world clock\n"
-            "  time set <HH:MM>                   set the world clock\n"
-            "  time real                          follow real time again\n"
+            "  time set <HH:MM>                   set the clock (24 hour)\n"
+            "  time speed <multiplier>            1 = real time, 24 = 1 hour day\n"
+            "  time reset                         real time, at the real time of day\n"
+            "  latency                            show simulated latency\n"
+            "  latency set <milliseconds>         0 turns it off\n"
             "  status                             clock, players online, tick\n"
             "  help                               this list\n"
             "  quit                               leave the console\n");
@@ -295,17 +399,38 @@ bool runCommand(const std::string& line) {
     } else if (command == "time") {
         if (words.size() == 1) {
             status();
-        } else if (words[1] == "real") {
-            timeCommand(TimeMode::FollowReal, 0.0f);
+        } else if (words[1] == "reset") {
+            timeCommand(TimeCommand::Reset, 0.0f);
         } else if (words[1] == "set" && words.size() >= 3) {
             float timeOfDay = 0.0f;
             if (!parseTimeOfDay(words[2], &timeOfDay)) {
-                std::printf("  expected HH:MM, e.g. 'time set 20:30'\n");
+                std::printf("  expected HH:MM in 24 hour form, e.g. 'time set 20:30'\n");
             } else {
-                timeCommand(TimeMode::Set, timeOfDay);
+                timeCommand(TimeCommand::Set, timeOfDay);
+            }
+        } else if (words[1] == "speed" && words.size() >= 3) {
+            char* end = nullptr;
+            const float speed = std::strtof(words[2].c_str(), &end);
+            if (end == words[2].c_str() || speed < 0.0f) {
+                std::printf("  expected a multiplier, e.g. 'time speed 24' for a one hour day\n");
+            } else {
+                timeCommand(TimeCommand::Speed, speed);
             }
         } else {
-            std::printf("  usage: time | time set <HH:MM> | time real\n");
+            std::printf("  usage: time\n"
+                        "         time set <HH:MM>\n"
+                        "         time speed <multiplier>\n"
+                        "         time reset\n");
+        }
+    } else if (command == "latency") {
+        if (words.size() == 1) {
+            // Reading it back is a set to whatever it already is, which the
+            // server answers with the current value.
+            status();
+        } else if (words[1] == "set" && words.size() >= 3) {
+            latencyCommand(true, static_cast<uint32_t>(std::atoi(words[2].c_str())));
+        } else {
+            std::printf("  usage: latency | latency set <milliseconds>\n");
         }
     } else if (command == "account") {
         const bool assumeYes = words.size() > 0 && words.back() == "--yes";
@@ -344,6 +469,15 @@ int main(int argc, char** argv) {
     // Credentials may come from the environment (for scripts) or the prompt.
     gUser = serverutil::envString("CONSOLE_USER", "");
     gPassword = serverutil::envString("CONSOLE_PASSWORD", "");
+    // Fail fast rather than blocking on a prompt nobody can answer: without a
+    // terminal and without credentials in the environment, there is no way to
+    // sign in, and hanging there looks like the server is unreachable.
+    if ((gUser.empty() || gPassword.empty()) && !isatty(fileno(stdin))) {
+        std::fprintf(stderr,
+                "no terminal to prompt on; set CONSOLE_USER and CONSOLE_PASSWORD\n");
+        return 1;
+    }
+
     if (gUser.empty()) {
         std::printf("account: ");
         std::fflush(stdout);

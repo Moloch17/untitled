@@ -5,8 +5,10 @@
 // they've bound a UDP address with a ClientHello matching their session.
 
 #include <algorithm>
+#include <cstdlib>
 #include <chrono>
 #include <csignal>
+#include <deque>
 #include <cstring>
 #include <map>
 #include <string>
@@ -51,6 +53,27 @@ struct Player {
     uint32_t outgoingSequence = 0;
     std::chrono::steady_clock::time_point lastUdpPacket;
 };
+
+// Packets held back to simulate a slow link. Applied in both directions, so a
+// setting of 100ms costs roughly 200ms round trip -- what a player would
+// actually feel.
+struct DelayedPacket {
+    double dueAt = 0.0;
+    Address address;
+    std::vector<uint8_t> data;
+};
+
+struct DelayedInput {
+    double dueAt = 0.0;
+    uint64_t playerId = 0;
+    world::PlayerInput input;
+};
+
+double monotonicSeconds() {
+    return std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+}
 
 uint64_t nowMs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -131,18 +154,27 @@ int main() {
     }
     gLog.info("listening on TCP %u / UDP %u, ticking at %d Hz", tcpPort, udpPort, kServerTickHz);
 
-    // Unset (or zero) means the world clock follows real time, so in-game noon
-    // is real noon. Setting it gives an accelerated cycle, which is what you
-    // want to watch a whole day pass while testing.
+    // The clock runs at TIME_SPEED times real time; 1 means in-game noon is
+    // real noon. DAY_LENGTH_SECONDS is kept as a convenience and converted,
+    // since "a one minute day" is easier to think about while testing.
+    float timeSpeed = 1.0f;
     const uint32_t dayLength = serverutil::envUint("DAY_LENGTH_SECONDS", 0);
+    if (dayLength > 0) {
+        timeSpeed = 86400.0f / static_cast<float>(dayLength);
+    } else if (const char* value = std::getenv("TIME_SPEED")) {
+        timeSpeed = static_cast<float>(std::atof(value));
+    }
 
     world::Simulation simulation;
-    simulation.init(static_cast<float>(dayLength));
-    if (dayLength > 0) {
-        gLog.info("day length is %u seconds (accelerated)", dayLength);
-    } else {
-        gLog.info("world clock follows local wall-clock time");
-    }
+    simulation.init(timeSpeed);
+    gLog.info("world clock at %.4gx real time (%.0f second day)", simulation.timeSpeed(),
+            86400.0f / simulation.timeSpeed());
+
+    // Simulated latency, set from the console. Zero means send and apply
+    // immediately, which is the normal path.
+    uint32_t simulatedLatencyMs = 0;
+    std::deque<DelayedPacket> delayedOutgoing;
+    std::deque<DelayedInput> delayedInputs;
 
     std::map<TcpServer::ConnectionId, Player> playersByConnection;
     std::map<uint64_t, TcpServer::ConnectionId> connectionByPlayer;
@@ -240,6 +272,46 @@ int main() {
                 break;
             }
 
+            case WorldMessage::AdminSetLatencyRequest: {
+                const std::string token = reader.string();
+                const uint32_t milliseconds = reader.u32();
+
+                const auto reply = [&server, id, &simulatedLatencyMs](uint8_t result) {
+                    std::vector<uint8_t> payload;
+                    ByteWriter writer(payload);
+                    writer.u8(result);
+                    writer.u32(simulatedLatencyMs);
+                    server.send(id, static_cast<uint16_t>(WorldMessage::AdminSetLatencyResponse),
+                            payload);
+                };
+                if (reader.failed()) {
+                    reply(1);
+                    return;
+                }
+
+                dbClient.lookupSession(token,
+                        [&simulatedLatencyMs, milliseconds, reply](bool ok,
+                                const serverutil::DbClient::SessionLookup& session) {
+                            if (!ok || !session.found) {
+                                reply(1);
+                                return;
+                            }
+                            if (session.username == kBootstrapAccount
+                                    || session.permissionLevel
+                                            < static_cast<uint8_t>(PermissionLevel::GameMaster)) {
+                                reply(2);
+                                return;
+                            }
+                            // Capped so a typo can't make the world unplayable
+                            // for everyone connected.
+                            simulatedLatencyMs = std::min(milliseconds, 2000u);
+                            gLog.info("%s set simulated latency to %u ms",
+                                    session.username.c_str(), simulatedLatencyMs);
+                            reply(0);
+                        });
+                break;
+            }
+
             case WorldMessage::AdminSetTimeRequest:
             case WorldMessage::AdminStatusRequest: {
                 // Authorised the same way as the auth server's commands: the
@@ -247,24 +319,27 @@ int main() {
                 // decides. Controlling the world clock is a game-master power.
                 const auto command = static_cast<WorldMessage>(type);
                 const std::string token = reader.string();
-                const auto mode = command == WorldMessage::AdminSetTimeRequest
-                        ? static_cast<TimeMode>(reader.u8())
-                        : TimeMode::Set;
-                const float requested =
+                const auto timeCommand = command == WorldMessage::AdminSetTimeRequest
+                        ? static_cast<TimeCommand>(reader.u8())
+                        : TimeCommand::Set;
+                const float value =
                         command == WorldMessage::AdminSetTimeRequest ? reader.f32() : 0.0f;
 
                 const WorldMessage responseType = command == WorldMessage::AdminSetTimeRequest
                         ? WorldMessage::AdminSetTimeResponse
                         : WorldMessage::AdminStatusResponse;
 
-                const auto reply = [&server, id, responseType, &simulation](uint8_t result) {
+                const auto reply = [&server, id, responseType, &simulation,
+                                           &simulatedLatencyMs](uint8_t result) {
                     std::vector<uint8_t> payload;
                     ByteWriter writer(payload);
                     writer.u8(result);
                     writer.f32(simulation.timeOfDay());
+                    writer.f32(simulation.timeSpeed());
                     if (responseType == WorldMessage::AdminStatusResponse) {
                         writer.u16(static_cast<uint16_t>(simulation.playerCount()));
                         writer.u32(simulation.tick());
+                        writer.u32(simulatedLatencyMs);
                     }
                     server.send(id, static_cast<uint16_t>(responseType), payload);
                 };
@@ -275,10 +350,17 @@ int main() {
                 }
 
                 dbClient.lookupSession(token,
-                        [&simulation, command, mode, requested, reply](bool ok,
+                        [&simulation, command, timeCommand, value, reply](bool ok,
                                 const serverutil::DbClient::SessionLookup& session) {
                             if (!ok || !session.found) {
                                 reply(1);
+                                return;
+                            }
+                            // The bootstrap account is admin-level but exists
+                            // only to create the first real admin.
+                            if (session.username == kBootstrapAccount) {
+                                gLog.warn("the bootstrap account may only create an account");
+                                reply(2);
                                 return;
                             }
                             if (session.permissionLevel
@@ -289,14 +371,28 @@ int main() {
                                 return;
                             }
                             if (command == WorldMessage::AdminSetTimeRequest) {
-                                if (mode == TimeMode::FollowReal) {
-                                    simulation.followRealTime();
-                                    gLog.info("%s set the world clock to follow real time",
-                                            session.username.c_str());
-                                } else {
-                                    simulation.setTimeOfDay(requested);
-                                    gLog.info("%s set the world clock to %.4f",
-                                            session.username.c_str(), requested);
+                                switch (timeCommand) {
+                                    case TimeCommand::Reset:
+                                        simulation.resetClock();
+                                        gLog.info("%s reset the world clock to real time",
+                                                session.username.c_str());
+                                        break;
+                                    case TimeCommand::Speed: {
+                                        // Clamped: zero freezes the clock, and
+                                        // the upper bound keeps a typo from
+                                        // making the sun strobe.
+                                        const float speed = std::clamp(value, 0.0f, 20000.0f);
+                                        simulation.setTimeSpeed(speed);
+                                        gLog.info("%s set the world clock to %.4gx real time",
+                                                session.username.c_str(), speed);
+                                        break;
+                                    }
+                                    case TimeCommand::Set:
+                                    default:
+                                        simulation.setTimeOfDay(value);
+                                        gLog.info("%s set the world clock to %.4f",
+                                                session.username.c_str(), value);
+                                        break;
                                 }
                             }
                             reply(0);
@@ -410,7 +506,13 @@ int main() {
                     input.jump = (buttons & kInputJump) != 0;
                     input.sprint = (buttons & kInputSprint) != 0;
 
-                    simulation.setInput(player->playerId, input);
+                    if (simulatedLatencyMs > 0) {
+                        delayedInputs.push_back({monotonicSeconds()
+                                        + simulatedLatencyMs / 1000.0,
+                                player->playerId, input});
+                    } else {
+                        simulation.setInput(player->playerId, input);
+                    }
                 }
             }
         }
@@ -444,7 +546,27 @@ int main() {
                 writeUdpHeader(packet, static_cast<uint16_t>(WorldMessage::Snapshot),
                         player.outgoingSequence++);
                 packet.insert(packet.end(), body.begin(), body.end());
-                udp.sendTo(packet.data(), packet.size(), player.udpAddress);
+
+                if (simulatedLatencyMs > 0) {
+                    delayedOutgoing.push_back({monotonicSeconds() + simulatedLatencyMs / 1000.0,
+                        player.udpAddress, std::move(packet)});
+                } else {
+                    udp.sendTo(packet.data(), packet.size(), player.udpAddress);
+                }
+            }
+        }
+
+        // Release anything the simulated link has held long enough.
+        {
+            const double now = monotonicSeconds();
+            while (!delayedInputs.empty() && delayedInputs.front().dueAt <= now) {
+                simulation.setInput(delayedInputs.front().playerId, delayedInputs.front().input);
+                delayedInputs.pop_front();
+            }
+            while (!delayedOutgoing.empty() && delayedOutgoing.front().dueAt <= now) {
+                const DelayedPacket& packet = delayedOutgoing.front();
+                udp.sendTo(packet.data.data(), packet.data.size(), packet.address);
+                delayedOutgoing.pop_front();
             }
         }
 

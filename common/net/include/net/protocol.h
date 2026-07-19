@@ -7,7 +7,7 @@ namespace net {
 // Bump whenever the wire format changes incompatibly. Both ends check it during
 // the handshake so a stale client fails with a clear error instead of decoding
 // garbage.
-constexpr uint32_t kProtocolVersion = 6;
+constexpr uint32_t kProtocolVersion = 8;
 
 // Tags the first four bytes of every UDP datagram. UDP sockets receive whatever
 // the internet sends them; this discards obvious noise before parsing.
@@ -20,6 +20,12 @@ constexpr int kServerTickHz = 60;
 // What an account is allowed to do. Every privileged action is authorised
 // against the level on the account behind the caller's session, so there is no
 // shared secret to leak, and every action is attributable to a person.
+// Seeded on a fresh database so the first real admin can be created, then
+// deleted as soon as one exists. It is admin-level but deliberately crippled:
+// the servers allow it exactly one command, `account create`.
+constexpr const char* kBootstrapAccount = "bootstrap";
+constexpr const char* kBootstrapPassword = "admin";
+
 enum class PermissionLevel : uint8_t {
     Player = 0,
     GameMaster = 1,
@@ -90,6 +96,8 @@ enum class DbMessage : uint16_t {
     AccountSetLevelRequest = 112,   // {requestId:u32, username:str, level:u8}
     AccountSetLevelResponse = 113,  // {requestId:u32, result:u8}
     AccountCreateWithLevelRequest = 114,  // {requestId:u32, username:str, hash:str, level:u8}
+    AdminExistsRequest = 115,   // {requestId:u32, excluding:str}
+    AdminExistsResponse = 116,  // {requestId:u32, exists:u8}
 };
 
 enum class DbResult : uint8_t {
@@ -126,16 +134,20 @@ enum class WorldMessage : uint16_t {
 
     // Administrative, from the console tool. Gated on ADMIN_SECRET like the
     // auth server's equivalents, because they act on the running world.
-    AdminSetTimeRequest = 220,   // {token:str, mode:u8, timeOfDay:f32}
-    AdminSetTimeResponse = 221,  // {result:u8, timeOfDay:f32}
+    AdminSetTimeRequest = 220,   // {token:str, command:u8, value:f32}
+    AdminSetTimeResponse = 221,  // {result:u8, timeOfDay:f32, speed:f32}
     AdminStatusRequest = 222,    // {token:str}
-    AdminStatusResponse = 223,   // {result:u8, timeOfDay:f32, players:u16, tick:u32}
+    // {result:u8, timeOfDay:f32, speed:f32, players:u16, tick:u32, latencyMs:u32}
+    AdminStatusResponse = 223,
+    AdminSetLatencyRequest = 224,   // {token:str, milliseconds:u32}
+    AdminSetLatencyResponse = 225,  // {result:u8, milliseconds:u32}
 };
 
-// How the world clock should run, for AdminSetTimeRequest.
-enum class TimeMode : uint8_t {
-    Set = 0,      // jump to the given time and carry on from there
-    FollowReal = 1,  // drop any offset and track the wall clock again
+// Console clock commands, for AdminSetTimeRequest.
+enum class TimeCommand : uint8_t {
+    Set = 0,    // jump to a time of day and carry on from there
+    Speed = 1,  // how fast the world clock runs; 1 is real time
+    Reset = 2,  // back to defaults: real time, running at real speed
 };
 
 enum class JoinResult : uint8_t {

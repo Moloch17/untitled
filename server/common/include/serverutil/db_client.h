@@ -52,6 +52,7 @@ public:
             uint8_t level, std::function<void(bool ok, net::DbResult, uint64_t)> callback);
     void setPermissionLevel(const std::string& username, uint8_t level,
             std::function<void(bool ok, net::DbResult)> callback);
+    void adminExists(const std::string& excluding, std::function<void(bool ok, bool exists)> cb);
     void createSession(uint64_t accountId, const std::string& token, uint32_t ttlSeconds,
             std::function<void(bool ok, net::DbResult)> callback);
     void lookupSession(const std::string& token,

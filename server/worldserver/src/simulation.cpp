@@ -1,5 +1,6 @@
 #include "simulation.h"
 
+#include <chrono>
 #include <cmath>
 #include <ctime>
 
@@ -19,6 +20,14 @@ constexpr float kStrafeRadiansPerSecond = 0.8f;
 
 namespace {
 
+// Seconds since the epoch, as a double so long uptimes keep sub-second
+// resolution.
+double realSeconds() {
+    return std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+}
+
 // Fraction of the day elapsed by the server's local wall-clock time, so that
 // in-game noon is real noon. Local rather than UTC -- inside a container that
 // means the TZ the container was given; see compose.yaml.
@@ -36,11 +45,9 @@ float wallClockTimeOfDay() {
 
 }  // namespace
 
-void Simulation::init(float dayLengthSeconds) {
-    mDayLengthSeconds = dayLengthSeconds;
-    if (mDayLengthSeconds <= 0.0f) {
-        mTimeOfDay = wallClockTimeOfDay();
-    }
+void Simulation::init(float timeSpeed) {
+    mTimeSpeed = timeSpeed > 0.0f ? timeSpeed : 1.0f;
+    resetClock();
 
     // The ground is the shared terrain heightfield; there is no collision world
     // to build.
@@ -94,16 +101,12 @@ void Simulation::step(float deltaSeconds) {
     mElapsed += deltaSeconds;
     ++mTick;
 
-    if (mDayLengthSeconds > 0.0f) {
-        // Accelerated cycle, for testing: advance and wrap at midnight.
-        mTimeOfDay += deltaSeconds / mDayLengthSeconds;
-        mTimeOfDay -= std::floor(mTimeOfDay);
-    } else {
-        // Follow the wall clock. Read every tick rather than integrated, so the
-        // world stays correct across a suspend, a clock change or a long pause.
-        mTimeOfDay = wallClockTimeOfDay() + mTimeOffset;
-        mTimeOfDay -= std::floor(mTimeOfDay);
-    }
+    // Derived from the anchor rather than accumulated, so it stays exact over
+    // long uptimes and across a pause.
+    const double elapsed = realSeconds() - mAnchorRealSeconds;
+    mTimeOfDay = mAnchorTimeOfDay
+            + static_cast<float>(elapsed * static_cast<double>(mTimeSpeed) / 86400.0);
+    mTimeOfDay -= std::floor(mTimeOfDay);
 
     // --- Players ---------------------------------------------------------
     // The movement rule itself lives in common/gamesim so the client can run
@@ -133,23 +136,28 @@ void Simulation::step(float deltaSeconds) {
     mCubeRotation.w = static_cast<float>(std::cos(angle * 0.5));
 }
 
-void Simulation::setTimeOfDay(float timeOfDay) {
-    timeOfDay -= std::floor(timeOfDay);
-    if (mDayLengthSeconds > 0.0f) {
-        // Accelerated mode owns the clock outright, so just move it.
-        mTimeOfDay = timeOfDay;
-    } else {
-        // Wall-clock mode: store the difference so time continues to run.
-        mTimeOffset = timeOfDay - wallClockTimeOfDay();
-        mTimeOfDay = timeOfDay;
-    }
+void Simulation::reanchor() {
+    mAnchorRealSeconds = realSeconds();
+    mAnchorTimeOfDay = mTimeOfDay;
 }
 
-void Simulation::followRealTime() {
-    mTimeOffset = 0.0f;
-    if (mDayLengthSeconds <= 0.0f) {
-        mTimeOfDay = wallClockTimeOfDay();
-    }
+void Simulation::setTimeOfDay(float timeOfDay) {
+    timeOfDay -= std::floor(timeOfDay);
+    mTimeOfDay = timeOfDay;
+    reanchor();
+}
+
+void Simulation::setTimeSpeed(float speed) {
+    // Re-anchor first: the new rate applies from now, so changing speed never
+    // makes the clock jump.
+    reanchor();
+    mTimeSpeed = speed;
+}
+
+void Simulation::resetClock() {
+    mTimeSpeed = 1.0f;
+    mTimeOfDay = wallClockTimeOfDay();
+    reanchor();
 }
 
 void Simulation::buildSnapshot(net::Snapshot* out) const {

@@ -224,6 +224,32 @@ void DbClient::setPermissionLevel(const std::string& username, uint8_t level,
             });
 }
 
+void DbClient::adminExists(const std::string& excluding,
+        std::function<void(bool, bool)> callback) {
+    if (!mConnected) {
+        callback(false, false);
+        return;
+    }
+    const uint32_t requestId = nextRequestId();
+    std::vector<uint8_t> payload;
+    ByteWriter writer(payload);
+    writer.u32(requestId);
+    writer.string(excluding);
+    mStream->send(static_cast<uint16_t>(DbMessage::AdminExistsRequest), payload);
+
+    registerHandler(requestId,
+            [callback](bool ok, uint16_t type, const std::vector<uint8_t>& data) {
+                if (!ok || type != static_cast<uint16_t>(DbMessage::AdminExistsResponse)) {
+                    callback(false, false);
+                    return;
+                }
+                ByteReader reader(data.data(), data.size());
+                reader.u32();
+                const bool exists = reader.u8() != 0;
+                callback(!reader.failed(), exists);
+            });
+}
+
 void DbClient::createSession(uint64_t accountId, const std::string& token, uint32_t ttlSeconds,
         std::function<void(bool, DbResult)> callback) {
     if (!mConnected) {

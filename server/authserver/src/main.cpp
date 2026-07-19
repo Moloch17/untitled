@@ -156,37 +156,49 @@ int main() {
     }
     log.info("connected to database server at %s:%u", dbHost.c_str(), dbPort);
 
-    // Apply the bootstrap before serving. It is a no-op once any admin exists,
-    // so leaving it set is harmless.
-    if (!bootstrap.empty()) {
-        const size_t colon = bootstrap.find(':');
-        if (colon == std::string::npos) {
-            log.warn("BOOTSTRAP_ADMIN should look like name:password");
-        } else {
-            const std::string name = bootstrap.substr(0, colon);
-            const std::string password = bootstrap.substr(colon + 1);
-            std::string hash;
-            if (validUsername(name) && password.size() >= kMinPasswordLength
-                    && hashPassword(password, &hash)) {
-                // Create if missing, then promote. Both are idempotent, so a
-                // restart with the same value changes nothing.
-                dbClient.createAccountWithLevel(name, hash,
-                        static_cast<uint8_t>(PermissionLevel::Admin),
-                        [](bool, DbResult, uint64_t) {});
-                dbClient.setPermissionLevel(name, static_cast<uint8_t>(PermissionLevel::Admin),
-                        [name](bool ok, DbResult result) {
-                            if (ok && result == DbResult::Ok) {
-                                log.info("bootstrap: '%s' has admin rights", name.c_str());
-                            }
-                        });
-                for (int i = 0; i < 40; ++i) {
-                    dbClient.poll();
-                    std::this_thread::sleep_for(std::chrono::milliseconds(25));
-                }
-            } else {
-                log.warn("BOOTSTRAP_ADMIN rejected: bad username or short password");
-            }
+    // Seed, or clean up, the bootstrap account.
+    //
+    // A fresh database has no privileged account and no way to grant the first
+    // one, so a known account is created to break the cycle. It is admin-level
+    // but allowed exactly one command (see the admin handler below), and it is
+    // removed the moment a real admin exists -- including on a later start, in
+    // case the console flow was interrupted half way.
+    dbClient.adminExists(kBootstrapAccount, [&dbClient](bool ok, bool exists) {
+        if (!ok) {
+            log.error("could not check for an existing admin");
+            return;
         }
+        if (exists) {
+            dbClient.deleteAccount(kBootstrapAccount, [](bool deleted, DbResult result) {
+                if (deleted && result == DbResult::Ok) {
+                    log.info("removed the bootstrap account; a real admin exists");
+                }
+            });
+            return;
+        }
+
+        std::string hash;
+        if (!hashPassword(kBootstrapPassword, &hash)) {
+            log.error("could not hash the bootstrap password");
+            return;
+        }
+        dbClient.createAccountWithLevel(kBootstrapAccount, hash,
+                static_cast<uint8_t>(PermissionLevel::Admin),
+                [](bool created, DbResult result, uint64_t) {
+                    if (!created) {
+                        return;
+                    }
+                    if (result == DbResult::Ok) {
+                        log.warn("no admin account exists");
+                        log.warn("created the '%s' account (password '%s')", kBootstrapAccount,
+                                kBootstrapPassword);
+                        log.warn("sign in with it and run: account create <name> <password>");
+                    }
+                });
+    });
+    for (int i = 0; i < 60 && gRunning; ++i) {
+        dbClient.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
     serverutil::TcpServer server;
@@ -347,6 +359,19 @@ int main() {
                                         AuthResult::SessionExpired);
                                 return;
                             }
+                            // The bootstrap account exists solely to create
+                            // the first real admin. Anything else from it is
+                            // refused, so a known-password account can't be
+                            // used for anything if it is ever left behind.
+                            const bool isBootstrap = session.username == kBootstrapAccount;
+                            if (isBootstrap
+                                    && command != AuthMessage::AdminAccountCreateRequest) {
+                                log.warn("the bootstrap account may only create an account");
+                                sendAdminResponse(server, id, responseType,
+                                        AuthResult::InsufficientPermission);
+                                return;
+                            }
+
                             // Account management is admin-only.
                             if (session.permissionLevel
                                     < static_cast<uint8_t>(PermissionLevel::Admin)) {
@@ -359,8 +384,14 @@ int main() {
 
                             const std::string actor = session.username;
                             if (command == AuthMessage::AdminAccountCreateRequest) {
+                                // What bootstrap creates is always an admin --
+                                // that is the whole point of it.
+                                const uint8_t createLevel = isBootstrap
+                                        ? static_cast<uint8_t>(PermissionLevel::Admin)
+                                        : level;
                                 if (!validUsername(target) || password.size() < kMinPasswordLength
-                                        || level > static_cast<uint8_t>(PermissionLevel::Admin)) {
+                                        || createLevel
+                                                > static_cast<uint8_t>(PermissionLevel::Admin)) {
                                     sendAdminResponse(server, id, responseType,
                                             AuthResult::MalformedRequest);
                                     return;
@@ -371,8 +402,9 @@ int main() {
                                             AuthResult::ServerError);
                                     return;
                                 }
-                                dbClient.createAccountWithLevel(target, hash, level,
-                                        [&server, id, responseType, target, level, actor](
+                                dbClient.createAccountWithLevel(target, hash, createLevel,
+                                        [&server, id, responseType, target,
+                                                level = createLevel, actor](
                                                 bool created, DbResult result, uint64_t) {
                                             if (!created) {
                                                 sendAdminResponse(server, id, responseType,
