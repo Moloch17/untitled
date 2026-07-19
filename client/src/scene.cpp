@@ -27,6 +27,13 @@ constexpr float kPlayerHalfHeight = 0.5f;
 
 // The sun and moon sit far enough out to read as sky rather than scenery, and
 // are drawn much larger than life so they're legible at that distance.
+// How far shadows are drawn. Cascades divide this range, so it is the main
+// control over texel density: the whole 1km terrain would give metres per
+// texel, while this keeps them small where the player is actually looking.
+// Past it, haze has taken the detail anyway.
+constexpr float kShadowDistance = 120.0f;
+constexpr float kNearPlaneForShadows = 0.5f;
+
 constexpr float kCelestialDistance = 260.0f;
 constexpr float kCelestialRadius = 9.0f;
 
@@ -45,8 +52,8 @@ void DemoScene::build(Engine* engine, Scene* scene) {
             .build(*engine);
 
     mPlaneMaterial = mMaterial->createInstance();
-    mPlaneMaterial->setParameter("baseColor", RgbType::LINEAR, float3{0.35f, 0.36f, 0.38f});
-    mPlaneMaterial->setParameter("roughness", 0.85f);
+    mPlaneMaterial->setParameter("baseColor", RgbType::LINEAR, float3{0.16f, 0.20f, 0.12f});
+    mPlaneMaterial->setParameter("roughness", 0.95f);
     mPlaneMaterial->setParameter("metallic", 0.0f);
 
     mCubeMaterial = mMaterial->createInstance();
@@ -54,7 +61,7 @@ void DemoScene::build(Engine* engine, Scene* scene) {
     mCubeMaterial->setParameter("roughness", 0.4f);
     mCubeMaterial->setParameter("metallic", 0.0f);
 
-    mPlaneMesh = createPlane(engine, kPlaneSize);
+    mPlaneMesh = createTerrain(engine);
     mCubeMesh = createCube(engine, kCubeSize);
     mCapsuleMesh = createCapsule(engine, kPlayerRadius, kPlayerHalfHeight);
 
@@ -64,9 +71,8 @@ void DemoScene::build(Engine* engine, Scene* scene) {
             .material(0, mPlaneMaterial)
             .geometry(0, RenderableManager::PrimitiveType::TRIANGLES,
                     mPlaneMesh.vertexBuffer, mPlaneMesh.indexBuffer)
-            .culling(false)
             .receiveShadows(true)
-            .castShadows(false)
+            .castShadows(true)
             .build(*engine, mPlane);
     scene->addEntity(mPlane);
 
@@ -86,13 +92,56 @@ void DemoScene::build(Engine* engine, Scene* scene) {
     transformManager.setTransform(transformManager.getInstance(mCube),
             mat4f::translation(float3{0.0f, kCubeSize * 0.5f, 0.0f}));
 
-    // Key light: casts the shadow that sells the cube sitting on the plane.
+    // Key light. Its direction, colour and intensity are driven by the day
+    // cycle; see applySky().
+    //
+    // Shadow settings matter far more here than they did over a small plane: a
+    // single map stretched across a kilometre of terrain gives each texel
+    // metres of ground, which is what makes edges crawl.
+    //
+    // These follow Filament's own sample defaults (samples/material_sandbox,
+    // Config.h): 2048 maps, lispsm on, stable off, normalBias 1.0,
+    // constantBias 0.001. `stable` was tried and reverted -- the header is
+    // explicit that it "disables all resolution enhancing features", and the
+    // resulting maps were too coarse to hold a shadow for anything the size of
+    // a character.
+    //
+    // Cascades are what actually fix the crawl: they concentrate resolution
+    // near the viewer instead of spreading it over the whole world.
+    LightManager::ShadowOptions shadowOptions;
+    shadowOptions.mapSize = 2048;
+    shadowOptions.shadowCascades = 4;
+    // lambda leans toward a logarithmic split, which puts more resolution
+    // close to the camera where shadow edges are actually examined.
+    LightManager::ShadowCascades::computePracticalSplits(shadowOptions.cascadeSplitPositions,
+            /*cascades=*/4, kNearPlaneForShadows, kShadowDistance, /*lambda=*/0.9f);
+    // Off, per Filament's samples: it trades away the resolution this needs.
+    shadowOptions.stable = false;
+    // Light-space perspective shadow maps: more texels where the camera is
+    // looking, for free.
+    shadowOptions.lispsm = true;
+    // Beyond this, haze has taken the detail anyway.
+    shadowOptions.shadowFar = kShadowDistance;
+    // The header says this "should be 1.0" -- it scales Filament's own error
+    // estimate, and raising it detaches shadows from small objects.
+    shadowOptions.normalBias = 1.0f;
+    shadowOptions.constantBias = 0.001f;
+
+    // Screen-space contact shadows. Cascaded maps lose the fine contact where
+    // an object meets the ground -- the cube and capsule end up looking like
+    // they hover. This traces a short ray in screen space to put that contact
+    // back, at a cost that scales with step count rather than scene size.
+    shadowOptions.screenSpaceContactShadows = true;
+    shadowOptions.stepCount = 8;
+    shadowOptions.maxShadowDistance = 0.4f;
+
     mSun = entityManager.create();
     LightManager::Builder(LightManager::Type::DIRECTIONAL)
             .color(Color::toLinear<ACCURATE>(sRGBColor{1.0f, 0.96f, 0.90f}))
             .intensity(90000.0f)
             .direction({0.6f, -1.0f, -0.8f})
             .castShadows(true)
+            .shadowOptions(shadowOptions)
             .build(*engine, mSun);
     scene->addEntity(mSun);
 

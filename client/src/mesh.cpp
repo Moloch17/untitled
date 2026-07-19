@@ -6,6 +6,8 @@
 #include <geometry/SurfaceOrientation.h>
 #include <math/mat3.h>
 #include <math/scalar.h>
+
+#include <terrain/heightfield.h>
 #include <math/quat.h>
 
 using namespace filament;
@@ -77,6 +79,66 @@ Mesh build(Engine* engine,
             IndexBuffer::BufferDescriptor(indexData->data(), indexData->size() * sizeof(uint16_t),
                     [](void*, size_t, void* user) {
                         delete static_cast<std::vector<uint16_t>*>(user);
+                    },
+                    indexData));
+
+    mesh.boundingBox = Box().set(minCorner, maxCorner);
+    return mesh;
+}
+
+// As build(), but with 32-bit indices: the terrain has far more than 65,536
+// vertices, which is all a 16-bit index can address.
+Mesh buildWide(Engine* engine,
+        const std::vector<float3>& positions,
+        const std::vector<float3>& normals,
+        const std::vector<uint32_t>& indices) {
+    const size_t vertexCount = positions.size();
+
+    std::vector<quatf> quats(vertexCount);
+    auto* orientation = geometry::SurfaceOrientation::Builder()
+            .vertexCount(vertexCount)
+            .normals(normals.data())
+            .build();
+    orientation->getQuats(quats.data(), vertexCount);
+    delete orientation;
+
+    std::vector<Vertex> vertices(vertexCount);
+    float3 minCorner = positions[0];
+    float3 maxCorner = positions[0];
+    for (size_t i = 0; i < vertexCount; ++i) {
+        vertices[i] = {positions[i], quats[i]};
+        minCorner = min(minCorner, positions[i]);
+        maxCorner = max(maxCorner, positions[i]);
+    }
+
+    Mesh mesh;
+    mesh.vertexBuffer = VertexBuffer::Builder()
+            .vertexCount(static_cast<uint32_t>(vertexCount))
+            .bufferCount(1)
+            .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3,
+                    offsetof(Vertex, position), sizeof(Vertex))
+            .attribute(VertexAttribute::TANGENTS, 0, VertexBuffer::AttributeType::FLOAT4,
+                    offsetof(Vertex, tangents), sizeof(Vertex))
+            .build(*engine);
+
+    auto* vertexData = new std::vector<Vertex>(std::move(vertices));
+    mesh.vertexBuffer->setBufferAt(*engine, 0,
+            VertexBuffer::BufferDescriptor(vertexData->data(), vertexData->size() * sizeof(Vertex),
+                    [](void*, size_t, void* user) {
+                        delete static_cast<std::vector<Vertex>*>(user);
+                    },
+                    vertexData));
+
+    mesh.indexBuffer = IndexBuffer::Builder()
+            .indexCount(static_cast<uint32_t>(indices.size()))
+            .bufferType(IndexBuffer::IndexType::UINT)
+            .build(*engine);
+
+    auto* indexData = new std::vector<uint32_t>(indices);
+    mesh.indexBuffer->setBuffer(*engine,
+            IndexBuffer::BufferDescriptor(indexData->data(), indexData->size() * sizeof(uint32_t),
+                    [](void*, size_t, void* user) {
+                        delete static_cast<std::vector<uint32_t>*>(user);
                     },
                     indexData));
 
@@ -180,6 +242,53 @@ Mesh createCapsule(Engine* engine, float radius, float halfHeight, int segments,
     }
 
     return build(engine, positions, normals, indices);
+}
+
+Mesh createTerrain(Engine* engine) {
+    constexpr int resolution = terrain::kMeshResolution;
+    constexpr int columns = resolution + 1;
+    constexpr float step = terrain::kWorldSize / static_cast<float>(resolution);
+
+    std::vector<float3> positions;
+    std::vector<float3> normals;
+    positions.reserve(static_cast<size_t>(columns) * columns);
+    normals.reserve(static_cast<size_t>(columns) * columns);
+
+    for (int row = 0; row < columns; ++row) {
+        for (int column = 0; column < columns; ++column) {
+            const float x = -terrain::kHalfWorld + column * step;
+            const float z = -terrain::kHalfWorld + row * step;
+
+            // The same function the server stands characters on.
+            positions.push_back({x, terrain::heightAt(x, z), z});
+
+            float nx = 0.0f;
+            float ny = 1.0f;
+            float nz = 0.0f;
+            terrain::normalAt(x, z, &nx, &ny, &nz);
+            normals.push_back({nx, ny, nz});
+        }
+    }
+
+    std::vector<uint32_t> indices;
+    indices.reserve(static_cast<size_t>(resolution) * resolution * 6);
+    for (int row = 0; row < resolution; ++row) {
+        for (int column = 0; column < resolution; ++column) {
+            const uint32_t topLeft = static_cast<uint32_t>(row * columns + column);
+            const uint32_t topRight = topLeft + 1;
+            const uint32_t bottomLeft = topLeft + columns;
+            const uint32_t bottomRight = bottomLeft + 1;
+
+            indices.push_back(topLeft);
+            indices.push_back(bottomLeft);
+            indices.push_back(topRight);
+            indices.push_back(topRight);
+            indices.push_back(bottomLeft);
+            indices.push_back(bottomRight);
+        }
+    }
+
+    return buildWide(engine, positions, normals, indices);
 }
 
 Mesh createSphere(Engine* engine, float radius, int segments, int rings) {

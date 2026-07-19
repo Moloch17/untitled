@@ -112,6 +112,7 @@ target_include_directories(client PRIVATE src ${RESOURCE_DIR} deps/stb)
 target_link_libraries(client PRIVATE
     net_client
     gamesim_client
+    terrain_client
     glfw
     filament
     backend

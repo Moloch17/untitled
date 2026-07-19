@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include <box3d/box3d.h>
+#include <terrain/heightfield.h>
 
 // Shared character simulation.
 //
@@ -12,9 +13,11 @@
 // contacts shove it around in ways a player reads as the game fighting them,
 // which is why this is a special case rather than ordinary dynamics.
 //
-// box3d still owns the world's static geometry; it is used here for collision
-// *queries* only (where is the ground under this capsule), so the controller
-// keeps working when the level is more than a flat plane.
+// The ground comes from the shared terrain heightfield, sampled directly rather
+// than raycast. For a heightfield that is both exact and far cheaper than a
+// cast, and -- because client and server call the same function -- it removes a
+// whole class of prediction error. box3d remains for dynamic bodies, which do
+// not exist yet; it no longer holds the terrain.
 //
 // Client-side prediction requires both ends to apply identical rules to
 // identical input, so this code is compiled into the world server and the
@@ -23,7 +26,6 @@ namespace gamesim {
 
 // --- Tuning, shared by both ends -------------------------------------------
 constexpr float kGravity = -20.0f;  // snappier than real gravity, as games are
-constexpr float kGroundHalfExtent = 10.0f;
 
 constexpr float kCapsuleRadius = 0.35f;
 constexpr float kCapsuleHalfHeight = 0.5f;
@@ -62,20 +64,9 @@ struct Character {
     bool grounded = false;
 };
 
-// Static collision world, used for queries only.
-b3WorldId createWorld();
-b3BodyId createGround(b3WorldId world);
-// Builds the broadphase so casts against the static geometry return hits.
-void finalizeWorld(b3WorldId world);
-
-// Height of the ground directly under `position`, or false if there is none
-// within `maxDistance` below it.
-bool groundHeightBelow(b3WorldId world, Vec3 position, float maxDistance, float* groundY);
-
 // Advances a character by one fixed tick. Must be called at the same rate on
 // both ends: a different timestep produces different results and therefore
 // constant corrections.
-void stepCharacter(b3WorldId world, Character& character, const CharacterInput& input,
-        float deltaSeconds);
+void stepCharacter(Character& character, const CharacterInput& input, float deltaSeconds);
 
 }  // namespace gamesim

@@ -53,9 +53,6 @@ private:
         uint32_t lastInputSequence = 0;
     };
 
-    b3WorldId mWorld = b3_nullWorldId;
-    b3BodyId mGround = b3_nullBodyId;
-
     std::map<uint64_t, Player> mPlayers;
     uint32_t mNextPlayerEntityId = kFirstPlayerEntityId;
 

@@ -51,10 +51,9 @@ public:
 private:
     void simulateTick(const gamesim::CharacterInput& input);
 
-    // Static geometry for ground queries. Other players are deliberately absent
-    // -- predicting them would mean predicting their input.
-    b3WorldId mWorld = b3_nullWorldId;
-    b3BodyId mGround = b3_nullBodyId;
+    // Other players are deliberately absent from prediction -- predicting them
+    // would mean predicting their input. The ground comes from the shared
+    // terrain function, so there is nothing to build here.
     gamesim::Character mCharacter;
     bool mActive = false;
 

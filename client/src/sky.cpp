@@ -16,16 +16,19 @@ constexpr float kArcAzimuth = 0.6f;
 
 // Peak brightness at noon, and the far dimmer moonlit night.
 constexpr float kSunIntensity = 100000.0f;
-constexpr float kMoonIntensity = 4000.0f;
+constexpr float kMoonIntensity = 9000.0f;
 constexpr float kDayAmbient = 30000.0f;
-constexpr float kNightAmbient = 2500.0f;
+// Night is lit well above black on purpose. A scene the player cannot read is
+// not atmospheric, it is broken, so this is the floor the ambient never goes
+// below rather than a value it passes through.
+constexpr float kNightAmbient = 9000.0f;
 
 const float3 kNoonLight{1.0f, 0.96f, 0.90f};
 const float3 kHorizonLight{1.0f, 0.52f, 0.26f};
 const float3 kMoonLight{0.55f, 0.68f, 1.0f};
 
 const float3 kDaySky{0.10f, 0.22f, 0.45f};
-const float3 kNightSky{0.006f, 0.010f, 0.024f};
+const float3 kNightSky{0.020f, 0.028f, 0.055f};
 const float3 kTwilightSky{0.30f, 0.12f, 0.07f};
 
 const float3 kSunDisc{1.0f, 0.95f, 0.75f};
@@ -88,6 +91,20 @@ SkyState evaluateSky(float timeOfDay) {
     sky.skyColor = mix(sky.skyColor, kTwilightSky, horizonCloseness * 0.75f);
 
     sky.ambientIntensity = kNightAmbient + (kDayAmbient - kNightAmbient) * dayAmount;
+    // Belt and braces: whatever the curve does above, never let it fall to a
+    // level where the world reads as black.
+    if (sky.ambientIntensity < kNightAmbient) {
+        sky.ambientIntensity = kNightAmbient;
+    }
+
+    // Haze is a slightly desaturated, brighter version of the sky: air scatters
+    // blue toward the viewer, so distant ground drifts toward the sky's colour
+    // rather than simply darkening.
+    sky.fogColor = mix(sky.skyColor * 1.15f + float3{0.03f, 0.05f, 0.08f}, kTwilightSky,
+            horizonCloseness * 0.5f);
+    // Light enough to read as distance rather than a wall. Haze should suggest
+    // depth, not hide the terrain a few hundred metres out.
+    sky.fogDensity = 0.0006f + 0.0004f * (1.0f - dayAmount);
 
     return sky;
 }

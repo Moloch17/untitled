@@ -6,7 +6,7 @@ namespace world {
 
 namespace {
 
-constexpr float kSpawnHeight = 1.2f;
+constexpr float kSpawnClearance = 0.2f;
 
 // --- Cube ------------------------------------------------------------------
 constexpr float kCubeSize = 1.0f;
@@ -19,20 +19,12 @@ constexpr float kStrafeRadiansPerSecond = 0.8f;
 void Simulation::init(float dayLengthSeconds) {
     mDayLengthSeconds = dayLengthSeconds > 0.0f ? dayLengthSeconds : 60.0f;
 
-    // Same world construction the client uses for prediction. It holds static
-    // geometry only -- characters are moved by the controller, not solved.
-    mWorld = gamesim::createWorld();
-    mGround = gamesim::createGround(mWorld);
-    gamesim::finalizeWorld(mWorld);
-    mCubePosition = {0.0f, kCubeSize * 0.5f, 0.0f};
+    // The ground is the shared terrain heightfield; there is no collision world
+    // to build.
+    mCubePosition = {0.0f, terrain::heightAt(0.0f, 0.0f) + kCubeSize * 0.5f, 0.0f};
 }
 
 void Simulation::shutdown() {
-    if (b3World_IsValid(mWorld)) {
-        // Destroying the world releases every body and shape in it.
-        b3DestroyWorld(mWorld);
-        mWorld = b3_nullWorldId;
-    }
     mPlayers.clear();
 }
 
@@ -47,8 +39,12 @@ uint32_t Simulation::addPlayer(uint64_t playerId) {
 
     // Spread spawns out so two players don't appear in the same spot.
     const float angle = static_cast<float>(mPlayers.size()) * 1.2f;
-    player.character.position = {std::cos(angle) * 3.0f, kSpawnHeight,
-        6.0f + std::sin(angle) * 2.0f};
+    const float spawnX = std::cos(angle) * 3.0f;
+    const float spawnZ = 6.0f + std::sin(angle) * 2.0f;
+    // Drop in from just above the ground rather than a fixed height, which on
+    // a hill would be either underground or a long fall.
+    player.character.position = {spawnX,
+        terrain::heightAt(spawnX, spawnZ) + gamesim::kRestHeight + kSpawnClearance, spawnZ};
 
     mPlayers.emplace(playerId, player);
     return player.entityId;
@@ -84,7 +80,7 @@ void Simulation::step(float deltaSeconds) {
     // exactly the same one when predicting. Nothing is solved: the controller
     // moves each transform directly.
     for (auto& [playerId, player] : mPlayers) {
-        gamesim::stepCharacter(mWorld, player.character, player.input, deltaSeconds);
+        gamesim::stepCharacter(player.character, player.input, deltaSeconds);
         player.lastInputSequence = player.input.sequence;
 
         // The jump is consumed: holding the key must not make the player hop
@@ -95,6 +91,8 @@ void Simulation::step(float deltaSeconds) {
     // --- Cube ------------------------------------------------------------
     const double phase = mElapsed * kStrafeRadiansPerSecond;
     mCubePosition.x = kStrafeAmplitude * static_cast<float>(std::sin(phase));
+    // Ride the terrain rather than hovering at a fixed height.
+    mCubePosition.y = terrain::heightAt(mCubePosition.x, mCubePosition.z) + kCubeSize * 0.5f;
     mCubeVelocity.x = kStrafeAmplitude * kStrafeRadiansPerSecond
             * static_cast<float>(std::cos(phase));
 

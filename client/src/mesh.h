@@ -24,6 +24,10 @@ Mesh createCube(filament::Engine* engine, float size);
 // Flat plane in the XZ axis facing +Y, centred on the origin.
 Mesh createPlane(filament::Engine* engine, float size);
 
+// Terrain grid sampled from the shared heightfield. Large enough to need 32-bit
+// indices, so it can't share the 16-bit path the other meshes use.
+Mesh createTerrain(filament::Engine* engine);
+
 // Sphere, for the sun and moon: a disc from any angle without billboarding.
 Mesh createSphere(filament::Engine* engine, float radius, int segments = 24, int rings = 12);
 

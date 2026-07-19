@@ -36,13 +36,6 @@ float distance(const gamesim::Vec3& a, const gamesim::Vec3& b) {
 void Prediction::init(gamesim::Vec3 spawnPosition) {
     shutdown();
 
-    // A private world holding just the static ground, used for the controller's
-    // ground queries. Other players aren't here -- they're replicated visuals,
-    // and predicting them would mean predicting their input too.
-    mWorld = gamesim::createWorld();
-    mGround = gamesim::createGround(mWorld);
-    gamesim::finalizeWorld(mWorld);
-
     mCharacter = {};
     mCharacter.position = spawnPosition;
 
@@ -55,18 +48,13 @@ void Prediction::init(gamesim::Vec3 spawnPosition) {
 }
 
 void Prediction::shutdown() {
-    if (b3World_IsValid(mWorld)) {
-        b3DestroyWorld(mWorld);
-    }
-    mWorld = b3_nullWorldId;
-    mGround = b3_nullBodyId;
     mCharacter = {};
     mPending.clear();
     mActive = false;
 }
 
 void Prediction::simulateTick(const gamesim::CharacterInput& input) {
-    gamesim::stepCharacter(mWorld, mCharacter, input, kTickSeconds);
+    gamesim::stepCharacter(mCharacter, input, kTickSeconds);
 }
 
 gamesim::CharacterInput Prediction::step(float moveForward, float moveRight, float yaw, bool jump,

@@ -143,6 +143,12 @@ bool Application::init(int width, int height, const char* title) {
     mView->setScene(mScene);
     mView->setCamera(mCamera);
 
+    // PCF, which is Filament's default and what its sample apps ship. PCSS was
+    // tried and is worse here: the header notes it ignores constantBias and
+    // normalBias entirely, so the bias tuning in scene.cpp silently does
+    // nothing under it, and its cost is the highest of the available types.
+    mView->setShadowType(View::ShadowType::PCF);
+
     // The world is deliberately not built here: nothing is loaded until the
     // player is actually in it.
     if (!mNet.init()) {
@@ -354,6 +360,24 @@ void Application::update(double deltaSeconds) {
     if (mDemoScene.loaded()) {
         const SkyState sky = evaluateSky(mNet.timeOfDay());
         mDemoScene.applySky(mEngine, mScene, sky);
+
+        // Atmospheric perspective, in the engine's own shaders rather than
+        // per-material, so it applies to everything in the world view. Started
+        // beyond the player so the character is never hazed.
+        filament::View::FogOptions fog;
+        fog.enabled = true;
+        fog.color = sky.fogColor;
+        fog.density = sky.fogDensity;
+        // Nothing within this range is hazed, so the player and nearby ground
+        // stay crisp.
+        fog.distance = 25.0f;
+        fog.inScatteringSize = -1.0f;
+        fog.height = 0.0f;
+        fog.heightFalloff = 0.0f;  // uniform with altitude; the terrain is low
+        // Never fully opaque: distant terrain should fade toward the sky, not
+        // disappear into it.
+        fog.maximumOpacity = 0.70f;
+        mView->setFogOptions(fog);
 
         Renderer::ClearOptions clearOptions;
         clearOptions.clearColor = {sky.skyColor.x, sky.skyColor.y, sky.skyColor.z, 1.0f};

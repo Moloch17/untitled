@@ -28,6 +28,11 @@ struct SkyState {
 
     bool sunVisible = false;
     bool moonVisible = false;
+
+    // Atmospheric perspective. Distant terrain takes on the colour of the air
+    // between it and the viewer, which is what makes distance readable.
+    filament::math::float3 fogColor{0.0f, 0.0f, 0.0f};
+    float fogDensity = 0.0f;
 };
 
 // Maps a time of day in [0,1) -- 0 midnight, 0.25 sunrise, 0.5 noon, 0.75
