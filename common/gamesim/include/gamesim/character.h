@@ -36,9 +36,6 @@ constexpr float kWalkSpeed = 5.0f;
 constexpr float kSprintSpeed = 9.0f;
 constexpr float kJumpSpeed = 7.5f;
 constexpr float kAirControl = 0.35f;
-// Below this speed there is no meaningful direction to face, so the character
-// holds the way it was already looking.
-constexpr float kFacingSpeedThreshold = 0.2f;
 // Falling faster than gravity alone would allow makes landings feel mushy.
 constexpr float kTerminalVelocity = -50.0f;
 // A character within this distance of the ground while descending is snapped

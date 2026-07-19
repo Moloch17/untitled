@@ -48,17 +48,18 @@ void stepCharacter(Character& character, const CharacterInput& input, float delt
         }
     }
 
-    // --- Turn toward the direction of travel --------------------------------
-    // Facing follows movement, not the camera. Input yaw still decides *where*
-    // the character goes, so movement stays camera-relative; this only decides
-    // which way the body points once it is going somewhere.
-    const float horizontalSpeed = std::sqrt(character.velocity.x * character.velocity.x
-            + character.velocity.z * character.velocity.z);
-    if (horizontalSpeed > kFacingSpeedThreshold) {
-        // Snapped, not eased. The body points exactly along its travel
-        // direction; the mouse never rotates it directly, it only changes where
-        // "forward" is for the next tick of movement.
-        character.facingYaw = std::atan2(character.velocity.x, -character.velocity.z);
+    // --- Face where the camera faces, while moving --------------------------
+    // Locked to the camera's forward direction, not to the velocity vector.
+    // Deriving it from velocity points the body along the diagonal the moment
+    // two keys are held -- 45 degrees off for W+D, 90 for a pure strafe, 180
+    // for walking backwards. Locking it to the camera means strafing slides
+    // sideways and S walks backwards, both while still facing forward, which is
+    // what a third-person camera implies.
+    //
+    // Facing only changes while there is movement intent: looking around while
+    // standing still leaves the character pointing where it was.
+    if (wishLength > 0.0f) {
+        character.facingYaw = input.yaw;
     }
 
     // --- Move the transform ------------------------------------------------
