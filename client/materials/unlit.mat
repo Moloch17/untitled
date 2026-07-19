@@ -1,0 +1,21 @@
+// Flat colour, no lighting. Used for the sun and moon: they are light sources
+// in spirit, so shading them by the scene's lighting would be backwards -- the
+// sun would go dark at dusk.
+material {
+    name : unlit,
+    parameters : [
+        {
+            type : float3,
+            name : baseColor
+        }
+    ],
+    shadingModel : unlit,
+    culling : back
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor.rgb = materialParams.baseColor;
+    }
+}

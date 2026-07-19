@@ -14,6 +14,7 @@
 #include <math/quat.h>
 
 #include "native_window.h"
+#include "sky.h"
 
 using namespace filament;
 using namespace filament::math;
@@ -349,6 +350,17 @@ void Application::update(double deltaSeconds) {
     }
     mPrediction.updateSmoothing(static_cast<float>(deltaSeconds));
 
+    // The sky is pure presentation, driven by the server's clock.
+    if (mDemoScene.loaded()) {
+        const SkyState sky = evaluateSky(mNet.timeOfDay());
+        mDemoScene.applySky(mEngine, mScene, sky);
+
+        Renderer::ClearOptions clearOptions;
+        clearOptions.clearColor = {sky.skyColor.x, sky.skyColor.y, sky.skyColor.z, 1.0f};
+        clearOptions.clear = true;
+        mRenderer->setClearOptions(clearOptions);
+    }
+
     applyReplication();
 
     // Follow the predicted position, not the replicated one: the camera has to
@@ -407,41 +419,48 @@ void Application::drawUi() {
 }
 
 void Application::run() {
+    // Pace the loop ourselves rather than letting beginFrame() decide.
+    //
+    // Filament wants scene and material changes made *before* a frame begins;
+    // doing them between beginFrame() and endFrame() draws "descriptor set was
+    // set between begin/endRenderPass" warnings. But the work also must not run
+    // flat out -- rebuilding and re-uploading the UI thousands of times per
+    // displayed frame backs the driver up and reads as input lag. Waiting for
+    // the frame interval before doing any of it satisfies both.
+    double refreshRate = 60.0;
+    if (GLFWmonitor* monitor = glfwGetPrimaryMonitor()) {
+        if (const GLFWvidmode* mode = glfwGetVideoMode(monitor)) {
+            if (mode->refreshRate > 0) {
+                refreshRate = mode->refreshRate;
+            }
+        }
+    }
+    const double frameInterval = 1.0 / refreshRate;
+
     double previous = glfwGetTime();
 
     while (!glfwWindowShouldClose(mWindow)) {
         glfwPollEvents();
 
-        // Filament paces frames: beginFrame returns false for one that should
-        // be skipped. Everything below has to sit inside that check.
-        //
-        // Doing the per-frame work regardless -- rebuilding the UI geometry
-        // and uploading it -- queues thousands of buffer updates per displayed
-        // frame, which backs the driver up and reads as input lag. Typed
-        // characters aren't lost meanwhile: they accumulate in the input state
-        // and are consumed by the next frame that actually draws.
-        if (!mRenderer->beginFrame(mSwapChain)) {
-            // Yield instead of spinning a core between frames. Short enough to
-            // cost no meaningful input latency.
+        const double now = glfwGetTime();
+        const double elapsed = now - previous;
+        if (elapsed < frameInterval) {
+            // Yield instead of spinning a core. Typed characters accumulate in
+            // the input state meanwhile and are consumed by the next frame.
             std::this_thread::sleep_for(std::chrono::microseconds(250));
             continue;
         }
-
-        // Timed here rather than at the top of the loop: this must be the
-        // interval between *rendered* frames. Measuring across skipped
-        // iterations would report a fraction of a millisecond and starve the
-        // fixed-tick accumulator that drives input and prediction.
-        const double now = glfwGetTime();
-        const double delta = now - previous;
         previous = now;
 
-        update(delta);
+        update(elapsed);
         drawUi();
 
-        mRenderer->render(mView);
-        // Drawn after the world so it composites on top.
-        mRenderer->render(mUi.view());
-        mRenderer->endFrame();
+        if (mRenderer->beginFrame(mSwapChain)) {
+            mRenderer->render(mView);
+            // Drawn after the world so it composites on top.
+            mRenderer->render(mUi.view());
+            mRenderer->endFrame();
+        }
     }
 }
 

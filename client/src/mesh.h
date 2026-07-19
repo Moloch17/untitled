@@ -24,6 +24,9 @@ Mesh createCube(filament::Engine* engine, float size);
 // Flat plane in the XZ axis facing +Y, centred on the origin.
 Mesh createPlane(filament::Engine* engine, float size);
 
+// Sphere, for the sun and moon: a disc from any angle without billboarding.
+Mesh createSphere(filament::Engine* engine, float radius, int segments = 24, int rings = 12);
+
 // Capsule aligned to the Y axis, centred on the origin: a cylinder of
 // 2*halfHeight capped with hemispheres. Matches the server's player collider.
 Mesh createCapsule(filament::Engine* engine, float radius, float halfHeight, int segments = 16,

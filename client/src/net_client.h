@@ -71,6 +71,10 @@ public:
     // Seconds since the newest snapshot arrived; the extrapolation window.
     double timeSinceSnapshot(double now) const { return now - mLastSnapshotAt; }
     uint32_t snapshotsReceived() const { return mSnapshotsReceived; }
+    // Server-owned world clock from the newest snapshot, in [0,1). At 60
+    // snapshots a second this is smooth enough to drive the sky directly, so
+    // the client keeps no clock of its own to drift out of step.
+    float timeOfDay() const { return mTimeOfDay; }
     // Simulated one-way latency in seconds, from NET_FAKE_LATENCY_MS. Zero
     // disables the whole mechanism.
     double fakeLatency() const { return mFakeLatency; }
@@ -116,6 +120,7 @@ private:
     double mLastPollTime = 0.0;
 
     std::map<uint32_t, Replicated> mEntities;
+    float mTimeOfDay = 0.0f;
     double mLastSnapshotAt = 0.0;
     double mLastHelloAt = 0.0;
     uint32_t mLastSnapshotSequence = 0;

@@ -12,6 +12,7 @@
 #include <net/snapshot.h>
 
 #include "mesh.h"
+#include "sky.h"
 
 namespace game {
 
@@ -35,6 +36,10 @@ public:
     void removeAbsentPlayers(filament::Engine* engine, filament::Scene* scene,
             const std::set<uint32_t>& present);
 
+    // Applies one moment of the day: moves the sun and moon, and retunes the
+    // light and ambience to match.
+    void applySky(filament::Engine* engine, filament::Scene* scene, const SkyState& sky);
+
 private:
     filament::Material* mMaterial = nullptr;
     filament::MaterialInstance* mPlaneMaterial = nullptr;
@@ -45,8 +50,16 @@ private:
 
     utils::Entity mPlane;
     utils::Entity mCube;
-    utils::Entity mSun;
-    utils::Entity mPointLight;
+    utils::Entity mSun;         // the directional light
+    utils::Entity mSunDisc;     // the visible body
+    utils::Entity mMoonDisc;
+    filament::MaterialInstance* mUnlitMaterial = nullptr;
+    filament::Material* mUnlitBase = nullptr;
+    filament::MaterialInstance* mSunMaterial = nullptr;
+    filament::MaterialInstance* mMoonMaterial = nullptr;
+    Mesh mDiscMesh;
+    bool mSunDiscInScene = false;
+    bool mMoonDiscInScene = false;
 
     // One shared capsule mesh; each player gets its own renderable and material
     // instance so they can be coloured individually.

@@ -162,7 +162,8 @@ a PostgreSQL you provide yourself, with `server/sql/schema.sql` already applied:
     DB_SERVER_HOST=localhost ./build/bin/worldserver
 
 Ports default to 7000 (dbserver), 7001 (authserver) and 7002/7003 TCP/UDP
-(worldserver); see `compose.yaml` for every variable.
+(worldserver). `DAY_LENGTH_SECONDS` on the world server sets how long one
+day/night cycle takes, 60 by default; see `compose.yaml` for every variable.
 
 ## Updating dependencies
 

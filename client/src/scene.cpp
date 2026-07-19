@@ -1,6 +1,7 @@
 #include "scene.h"
 
 #include <filament/LightManager.h>
+#include <filament/Material.h>
 #include <filament/MaterialInstance.h>
 #include <filament/RenderableManager.h>
 #include <filament/TransformManager.h>
@@ -23,6 +24,11 @@ constexpr float kCubeSize = 1.0f;
 // players visibly float above or sink into the ground.
 constexpr float kPlayerRadius = 0.35f;
 constexpr float kPlayerHalfHeight = 0.5f;
+
+// The sun and moon sit far enough out to read as sky rather than scenery, and
+// are drawn much larger than life so they're legible at that distance.
+constexpr float kCelestialDistance = 260.0f;
+constexpr float kCelestialRadius = 9.0f;
 
 }  // namespace
 
@@ -101,16 +107,36 @@ void DemoScene::build(Engine* engine, Scene* scene) {
             .build(*engine);
     scene->setIndirectLight(mIndirectLight);
 
-    // A warm point light off to one side, to show local falloff alongside the
-    // directional sun. Point lights aren't subject to the single-light limit.
-    mPointLight = entityManager.create();
-    LightManager::Builder(LightManager::Type::POINT)
-            .color(Color::toLinear<ACCURATE>(sRGBColor{1.0f, 0.55f, 0.25f}))
-            .intensity(120000.0f)
-            .falloff(8.0f)
-            .position({-2.5f, 1.5f, 1.5f})
-            .build(*engine, mPointLight);
-    scene->addEntity(mPointLight);
+    // Sun and moon bodies. Unlit, because they are the light: shading them by
+    // the scene's own lighting would black the sun out at dusk.
+    mUnlitBase = Material::Builder()
+            .package(CLIENTMATERIALS_UNLIT_DATA, CLIENTMATERIALS_UNLIT_SIZE)
+            .build(*engine);
+    mDiscMesh = createSphere(engine, kCelestialRadius);
+
+    mSunMaterial = mUnlitBase->createInstance();
+    mMoonMaterial = mUnlitBase->createInstance();
+
+    mSunDisc = entityManager.create();
+    RenderableManager::Builder(1)
+            .boundingBox(mDiscMesh.boundingBox)
+            .material(0, mSunMaterial)
+            .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, mDiscMesh.vertexBuffer,
+                    mDiscMesh.indexBuffer)
+            .castShadows(false)
+            .receiveShadows(false)
+            .build(*engine, mSunDisc);
+
+    mMoonDisc = entityManager.create();
+    RenderableManager::Builder(1)
+            .boundingBox(mDiscMesh.boundingBox)
+            .material(0, mMoonMaterial)
+            .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, mDiscMesh.vertexBuffer,
+                    mDiscMesh.indexBuffer)
+            .castShadows(false)
+            .receiveShadows(false)
+            .build(*engine, mMoonDisc);
+
     mLoaded = true;
 }
 
@@ -127,6 +153,47 @@ void DemoScene::setEntityTransform(Engine* engine, uint32_t entityId, const net:
     const mat4f transform = mat4f::translation(float3{position.x, position.y, position.z})
             * mat4f(orientation);
     transformManager.setTransform(instance, transform);
+}
+
+void DemoScene::applySky(Engine* engine, Scene* scene, const SkyState& sky) {
+    if (!mLoaded) {
+        return;
+    }
+
+    auto& lightManager = engine->getLightManager();
+    const auto sun = lightManager.getInstance(mSun);
+    lightManager.setDirection(sun, sky.lightDirection);
+    lightManager.setColor(sun, sky.lightColor);
+    lightManager.setIntensity(sun, sky.lightIntensity);
+
+    // Only the intensity of the ambient term is animated. Its colour is baked
+    // into spherical harmonics at build time, and rebuilding an IndirectLight
+    // every frame would churn driver handles for a difference the sky colour
+    // already carries.
+    mIndirectLight->setIntensity(sky.ambientIntensity);
+
+    auto& transformManager = engine->getTransformManager();
+    const auto place = [&](utils::Entity entity, const filament::math::float3& direction) {
+        transformManager.setTransform(transformManager.getInstance(entity),
+                mat4f::translation(direction * kCelestialDistance));
+    };
+    place(mSunDisc, sky.sunDirection);
+    place(mMoonDisc, sky.moonDirection);
+
+    mSunMaterial->setParameter("baseColor", RgbType::LINEAR, sky.sunColor);
+    mMoonMaterial->setParameter("baseColor", RgbType::LINEAR, sky.moonColor);
+
+    // The ground plane is finite, so a body below the horizon would otherwise
+    // be visible past its edge. Add and remove them instead of just moving
+    // them, and only when the state actually changes.
+    if (sky.sunVisible != mSunDiscInScene) {
+        sky.sunVisible ? scene->addEntity(mSunDisc) : scene->remove(mSunDisc);
+        mSunDiscInScene = sky.sunVisible;
+    }
+    if (sky.moonVisible != mMoonDiscInScene) {
+        sky.moonVisible ? scene->addEntity(mMoonDisc) : scene->remove(mMoonDisc);
+        mMoonDiscInScene = sky.moonVisible;
+    }
 }
 
 void DemoScene::setPlayerTransform(Engine* engine, Scene* scene, uint32_t entityId,
@@ -188,11 +255,13 @@ void DemoScene::destroy(Engine* engine, Scene* scene) {
     }
     auto& entityManager = utils::EntityManager::get();
 
-    for (utils::Entity entity : {mPlane, mCube, mSun, mPointLight}) {
+    for (utils::Entity entity : {mPlane, mCube, mSun, mSunDisc, mMoonDisc}) {
         scene->remove(entity);
         engine->destroy(entity);
         entityManager.destroy(entity);
     }
+    mSunDiscInScene = false;
+    mMoonDiscInScene = false;
 
     scene->setIndirectLight(nullptr);
     engine->destroy(mIndirectLight);
@@ -202,10 +271,14 @@ void DemoScene::destroy(Engine* engine, Scene* scene) {
     mPlaneMesh.destroy(engine);
     mCubeMesh.destroy(engine);
     mCapsuleMesh.destroy(engine);
+    mDiscMesh.destroy(engine);
 
     engine->destroy(mPlaneMaterial);
     engine->destroy(mCubeMaterial);
+    engine->destroy(mSunMaterial);
+    engine->destroy(mMoonMaterial);
     engine->destroy(mMaterial);
+    engine->destroy(mUnlitBase);
 
     mPlaneMaterial = nullptr;
     mCubeMaterial = nullptr;

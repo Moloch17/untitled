@@ -7,7 +7,7 @@ namespace net {
 // Bump whenever the wire format changes incompatibly. Both ends check it during
 // the handshake so a stale client fails with a clear error instead of decoding
 // garbage.
-constexpr uint32_t kProtocolVersion = 3;
+constexpr uint32_t kProtocolVersion = 4;
 
 // Tags the first four bytes of every UDP datagram. UDP sockets receive whatever
 // the internet sends them; this discards obvious noise before parsing.
@@ -111,6 +111,10 @@ enum class JoinResult : uint8_t {
     ServerError = 4,
 };
 
+// The world clock is server-owned and replicated like everything else, so two
+// clients can never disagree about what time it is. One full day is
+// DAY_LENGTH_SECONDS on the world server (60 by default).
+//
 // Snapshot payload:
 //   {tick:u32, serverTimeMs:u64, entityCount:u16,
 //    entities:[{id:u32, posX/Y/Z:f32, rotX/Y/Z/W:f32,

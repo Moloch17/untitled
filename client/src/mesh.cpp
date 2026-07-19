@@ -182,6 +182,10 @@ Mesh createCapsule(Engine* engine, float radius, float halfHeight, int segments,
     return build(engine, positions, normals, indices);
 }
 
+Mesh createSphere(Engine* engine, float radius, int segments, int rings) {
+    return createCapsule(engine, radius, 0.0f, segments, rings);
+}
+
 Mesh createPlane(Engine* engine, float size) {
     const float h = size * 0.5f;
     const std::vector<float3> positions = {

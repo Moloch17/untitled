@@ -45,7 +45,7 @@ add_subdirectory(deps/filament EXCLUDE_FROM_ALL)
 # than loaded from disk at runtime.
 # ---------------------------------------------------------------------------
 
-set(MATERIAL_SRCS materials/lit.mat materials/ui.mat)
+set(MATERIAL_SRCS materials/lit.mat materials/ui.mat materials/unlit.mat)
 
 set(GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set(MATERIAL_DIR ${GENERATED_DIR}/material)
@@ -97,6 +97,7 @@ add_executable(client
     src/camera_controller.cpp
     src/mesh.cpp
     src/scene.cpp
+    src/sky.cpp
     src/net_client.cpp
     src/prediction.cpp
     src/screens.cpp

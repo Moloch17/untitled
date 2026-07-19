@@ -130,8 +130,13 @@ int main() {
     }
     gLog.info("listening on TCP %u / UDP %u, ticking at %d Hz", tcpPort, udpPort, kServerTickHz);
 
+    // One full day/night cycle. Short by default: a 60-second day makes the
+    // cycle observable while testing instead of something you wait an hour for.
+    const uint32_t dayLength = serverutil::envUint("DAY_LENGTH_SECONDS", 60);
+
     world::Simulation simulation;
-    simulation.init();
+    simulation.init(static_cast<float>(dayLength));
+    gLog.info("day length is %u seconds", dayLength);
 
     std::map<TcpServer::ConnectionId, Player> playersByConnection;
     std::map<uint64_t, TcpServer::ConnectionId> connectionByPlayer;

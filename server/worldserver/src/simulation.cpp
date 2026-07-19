@@ -16,7 +16,9 @@ constexpr float kStrafeRadiansPerSecond = 0.8f;
 
 }  // namespace
 
-void Simulation::init() {
+void Simulation::init(float dayLengthSeconds) {
+    mDayLengthSeconds = dayLengthSeconds > 0.0f ? dayLengthSeconds : 60.0f;
+
     // Same world construction the client uses for prediction. It holds static
     // geometry only -- characters are moved by the controller, not solved.
     mWorld = gamesim::createWorld();
@@ -73,6 +75,10 @@ void Simulation::step(float deltaSeconds) {
     mElapsed += deltaSeconds;
     ++mTick;
 
+    // Advance the world clock, wrapping at midnight.
+    mTimeOfDay += deltaSeconds / mDayLengthSeconds;
+    mTimeOfDay -= std::floor(mTimeOfDay);
+
     // --- Players ---------------------------------------------------------
     // The movement rule itself lives in common/gamesim so the client can run
     // exactly the same one when predicting. Nothing is solved: the controller
@@ -101,6 +107,7 @@ void Simulation::step(float deltaSeconds) {
 
 void Simulation::buildSnapshot(net::Snapshot* out) const {
     out->tick = mTick;
+    out->timeOfDay = mTimeOfDay;
     out->entities.clear();
     out->entities.reserve(mPlayers.size() + 1);
 

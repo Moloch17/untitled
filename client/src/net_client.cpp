@@ -286,6 +286,8 @@ void NetClient::applySnapshotPacket(const uint8_t* data, size_t size, uint32_t s
         return;
     }
 
+    mTimeOfDay = snapshot.timeOfDay;
+
     for (const EntityState& entity : snapshot.entities) {
         Replicated& replicated = mEntities[entity.id];
         replicated.state = entity;

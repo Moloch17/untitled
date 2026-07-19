@@ -25,7 +25,8 @@ using PlayerInput = gamesim::CharacterInput;
 // place itself anywhere the server didn't agree to.
 class Simulation {
 public:
-    void init();
+    // dayLengthSeconds is how long one full day/night cycle takes.
+    void init(float dayLengthSeconds);
     void shutdown();
 
     // Adds a player capsule at a spawn point. Returns its entity id.
@@ -39,6 +40,7 @@ public:
     void buildSnapshot(net::Snapshot* out) const;
 
     uint32_t tick() const { return mTick; }
+    float timeOfDay() const { return mTimeOfDay; }
 
 private:
     struct Player {
@@ -65,6 +67,10 @@ private:
 
     uint32_t mTick = 0;
     double mElapsed = 0.0;
+
+    // Wraps in [0,1). Starts at morning so a fresh server isn't pitch black.
+    float mTimeOfDay = 0.3f;
+    float mDayLengthSeconds = 60.0f;
 };
 
 }  // namespace world

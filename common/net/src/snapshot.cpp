@@ -9,6 +9,7 @@ void encodeSnapshot(const Snapshot& snapshot, std::vector<uint8_t>& out) {
     ByteWriter writer(out);
     writer.u32(snapshot.tick);
     writer.u64(snapshot.serverTimeMs);
+    writer.f32(snapshot.timeOfDay);
     writer.u16(static_cast<uint16_t>(snapshot.entities.size()));
 
     for (const EntityState& entity : snapshot.entities) {
@@ -35,6 +36,7 @@ bool decodeSnapshot(const uint8_t* data, size_t size, Snapshot* out) {
     ByteReader reader(data, size);
     out->tick = reader.u32();
     out->serverTimeMs = reader.u64();
+    out->timeOfDay = reader.f32();
     const uint16_t count = reader.u16();
 
     if (reader.failed() || count > kMaxEntitiesPerSnapshot) {

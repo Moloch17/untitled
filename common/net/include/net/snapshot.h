@@ -39,6 +39,9 @@ struct EntityState {
 struct Snapshot {
     uint32_t tick = 0;
     uint64_t serverTimeMs = 0;
+    // World clock, wrapping in [0,1): 0 is midnight, 0.25 sunrise, 0.5 noon,
+    // 0.75 sunset. Sent every tick, so the client needs no local clock.
+    float timeOfDay = 0.0f;
     std::vector<EntityState> entities;
 };
 
