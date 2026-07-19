@@ -83,31 +83,86 @@ tools `admin`, `authcli`, `worldcli`.
 
 ## Running
 
-The client needs a Vulkan driver (`vulkan-radeon`, `vulkan-intel`, or the
-NVIDIA driver) and, on Linux, a Wayland session:
-
-    ./build/bin/client
+### 1. Start the servers
 
 The servers need a PostgreSQL database. The quickest way to get one, plus all
 three servers, is Docker:
 
     docker compose up -d
 
-That runs the host-built binaries in containers with `build/bin` and
-`data/postgres` bind-mounted, so both stay visible on the host. Rebuilt a
-server? Restart it to pick up the new binary:
+Wait a few seconds for the database to report healthy:
+
+    docker compose ps
+
+On the very first run this creates the database and applies
+`server/sql/schema.sql`, which lives in `data/postgres` on the host. That
+directory is **not** in the repository, so a fresh clone always starts with an
+empty database and no accounts -- you cannot log in until you create one.
+
+Rebuilt a server? A running container keeps using the binary it started with,
+so restart it to pick up the new one:
 
     docker compose restart dbserver authserver worldserver
 
-To run a server directly instead, point it at your own PostgreSQL:
+### 2. Create an account
+
+Account management goes through the `admin` tool, which authenticates with a
+shared secret that must match the auth server's. Compose sets it to
+`change-me-in-dot-env` unless you override it:
+
+    export ADMIN_SECRET=change-me-in-dot-env
+    ./build/bin/admin account create <name> <password>
+
+To use your own secret and database password, create a `.env` file next to
+`compose.yaml` -- Compose reads it automatically:
+
+    ADMIN_SECRET=something-private
+    POSTGRES_PASSWORD=something-private
+
+then `docker compose up -d` again, and export the same `ADMIN_SECRET` in the
+shell you run `admin` from.
+
+Deleting an account asks for confirmation and takes its sessions with it:
+
+    ./build/bin/admin account delete <name>
+
+### 3. Run the client
+
+The client needs a Vulkan driver (`vulkan-radeon`, `vulkan-intel`, or the
+NVIDIA driver) and, on Linux, a Wayland session:
+
+    ./build/bin/client
+
+It opens on a login screen and connects to `127.0.0.1:7001` by default. Sign in
+with the account from step 2. To point it at a server elsewhere:
+
+    AUTH_HOST=192.0.2.10 AUTH_SERVER_PORT=7001 ./build/bin/client
+
+If the servers aren't running, the login screen reports `cannot reach auth
+server` rather than failing silently.
+
+### Checking the servers without the client
+
+Two command-line tools exercise the same paths, which is quicker than launching
+the game when you're changing server code:
+
+    ./build/bin/authcli login <name> <password>       # auth only
+    ./build/bin/worldcli <name> <password> 5          # login, join, snapshots
+    ./build/bin/worldcli <name> <password> 5 move     # ...while walking forward
+    ./build/bin/worldcli <name> <password> 5 jump     # ...while jumping
+
+### Running a server outside Docker
+
+Each server is a plain executable configured by environment variables. It needs
+a PostgreSQL you provide yourself, with `server/sql/schema.sql` already applied:
 
     PGHOST=localhost PGDATABASE=untitled PGUSER=untitled PGPASSWORD=... \
         ./build/bin/dbserver
+    DB_SERVER_HOST=localhost ADMIN_SECRET=... ./build/bin/authserver
+    DB_SERVER_HOST=localhost ./build/bin/worldserver
 
-`server/sql/schema.sql` creates the tables. Create an account with:
-
-    export ADMIN_SECRET=...        # must match the auth server's
-    ./build/bin/admin account create <name> <password>
+Ports default to 7000 (dbserver), 7001 (authserver) and 7002/7003 TCP/UDP
+(worldserver); see `compose.yaml` for every variable.
 
 ## Updating dependencies
 
