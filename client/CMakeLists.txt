@@ -45,7 +45,8 @@ add_subdirectory(deps/filament EXCLUDE_FROM_ALL)
 # than loaded from disk at runtime.
 # ---------------------------------------------------------------------------
 
-set(MATERIAL_SRCS materials/lit.mat materials/ui.mat materials/unlit.mat)
+set(MATERIAL_SRCS materials/lit.mat materials/ui.mat materials/unlit.mat
+    materials/character.mat)
 
 set(GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set(MATERIAL_DIR ${GENERATED_DIR}/material)

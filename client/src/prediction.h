@@ -41,6 +41,9 @@ public:
     // Where to draw the local character. Includes the smoothing offset, so a
     // correction is eased out over a few frames rather than snapping.
     gamesim::Vec3 renderPosition() const;
+    // Predicted facing, so the local character turns the instant it starts
+    // moving instead of a round trip later.
+    float facingYaw() const { return mCharacter.facingYaw; }
     // Decays the visual correction offset. Call once per rendered frame.
     void updateSmoothing(float deltaSeconds);
 

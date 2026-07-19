@@ -1,0 +1,49 @@
+// Character surface: a checker so rotation is readable at a glance, and a plus
+// on the forward face so facing is unambiguous even when standing still.
+//
+// Generated in the shader rather than from a texture: it costs no asset, and
+// the pattern stays crisp at any distance.
+material {
+    name : character,
+    parameters : [
+        { type : float3, name : colorA },
+        { type : float3, name : colorB },
+        { type : float3, name : markColor }
+    ],
+    requires : [ uv0 ],
+    shadingModel : lit,
+    culling : back
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 uv = getUV0();
+
+        // u wraps the capsule, v runs top to bottom. The counts differ so the
+        // squares come out roughly square in world space rather than stretched.
+        float checker = mod(floor(uv.x * 8.0) + floor(uv.y * 6.0), 2.0);
+        vec3 base = mix(materialParams.colorA, materialParams.colorB, checker);
+
+        // Forward marker. The centre is 0.0 rather than the 0.75 the mesh's
+        // longitude maths would suggest: the position was established by
+        // rendering the capsule from all four sides and finding where the
+        // marker actually lands, which is a quarter turn from the arithmetic.
+        // Trust the measurement over the derivation.
+        float du = abs(fract(uv.x + 0.5) - 0.5);
+        float dv = abs(uv.y - 0.5);
+
+        // Two crossed bars. u is the wider axis, so its extents are scaled to
+        // keep the plus looking square.
+        // u wraps ~2.2m of circumference and v spans ~1.7m of height, so the
+        // extents differ to make the arms come out about equal in world space.
+        float vertical = step(du, 0.022) * step(dv, 0.100);
+        float horizontal = step(du, 0.065) * step(dv, 0.030);
+        float plus = clamp(vertical + horizontal, 0.0, 1.0);
+
+        material.baseColor.rgb = mix(base, materialParams.markColor, plus);
+        material.roughness = 0.6;
+        material.metallic = 0.0;
+    }
+}

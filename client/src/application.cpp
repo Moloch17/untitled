@@ -1,6 +1,7 @@
 #include "application.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <chrono>
 #include <cstdlib>
@@ -264,10 +265,13 @@ void Application::applyReplication() {
                 }
 
                 // Draw it where prediction says, not where the (older)
-                // snapshot says.
+                // snapshot says -- position and facing alike.
                 const gamesim::Vec3 predicted = mPrediction.renderPosition();
+                const float facing = mPrediction.facingYaw();
+                const net::Quat predictedFacing{0.0f, std::sin(facing * 0.5f), 0.0f,
+                    std::cos(facing * 0.5f)};
                 mDemoScene.setPlayerTransform(mEngine, mScene, id, true,
-                        {predicted.x, predicted.y, predicted.z}, rotation);
+                        {predicted.x, predicted.y, predicted.z}, predictedFacing);
             } else {
                 mDemoScene.setPlayerTransform(mEngine, mScene, id, false, position, rotation);
             }

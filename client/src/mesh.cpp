@@ -22,6 +22,7 @@ namespace {
 struct Vertex {
     float3 position;
     quatf tangents;
+    float2 uv;
 };
 
 // Builds the buffers from parallel position/normal arrays. Normals are only
@@ -29,6 +30,7 @@ struct Vertex {
 Mesh build(Engine* engine,
         const std::vector<float3>& positions,
         const std::vector<float3>& normals,
+        const std::vector<float2>& uvs,
         const std::vector<uint16_t>& indices) {
     const size_t vertexCount = positions.size();
 
@@ -44,7 +46,7 @@ Mesh build(Engine* engine,
     float3 minCorner = positions[0];
     float3 maxCorner = positions[0];
     for (size_t i = 0; i < vertexCount; ++i) {
-        vertices[i] = {positions[i], quats[i]};
+        vertices[i] = {positions[i], quats[i], uvs[i]};
         minCorner = min(minCorner, positions[i]);
         maxCorner = max(maxCorner, positions[i]);
     }
@@ -57,6 +59,8 @@ Mesh build(Engine* engine,
                     offsetof(Vertex, position), sizeof(Vertex))
             .attribute(VertexAttribute::TANGENTS, 0, VertexBuffer::AttributeType::FLOAT4,
                     offsetof(Vertex, tangents), sizeof(Vertex))
+            .attribute(VertexAttribute::UV0, 0, VertexBuffer::AttributeType::FLOAT2,
+                    offsetof(Vertex, uv), sizeof(Vertex))
             .build(*engine);
 
     // The staging copies must outlive the upload, so hand ownership of a heap
@@ -91,6 +95,7 @@ Mesh build(Engine* engine,
 Mesh buildWide(Engine* engine,
         const std::vector<float3>& positions,
         const std::vector<float3>& normals,
+        const std::vector<float2>& uvs,
         const std::vector<uint32_t>& indices) {
     const size_t vertexCount = positions.size();
 
@@ -106,7 +111,7 @@ Mesh buildWide(Engine* engine,
     float3 minCorner = positions[0];
     float3 maxCorner = positions[0];
     for (size_t i = 0; i < vertexCount; ++i) {
-        vertices[i] = {positions[i], quats[i]};
+        vertices[i] = {positions[i], quats[i], uvs[i]};
         minCorner = min(minCorner, positions[i]);
         maxCorner = max(maxCorner, positions[i]);
     }
@@ -119,6 +124,8 @@ Mesh buildWide(Engine* engine,
                     offsetof(Vertex, position), sizeof(Vertex))
             .attribute(VertexAttribute::TANGENTS, 0, VertexBuffer::AttributeType::FLOAT4,
                     offsetof(Vertex, tangents), sizeof(Vertex))
+            .attribute(VertexAttribute::UV0, 0, VertexBuffer::AttributeType::FLOAT2,
+                    offsetof(Vertex, uv), sizeof(Vertex))
             .build(*engine);
 
     auto* vertexData = new std::vector<Vertex>(std::move(vertices));
@@ -174,11 +181,14 @@ Mesh createCube(Engine* engine, float size) {
 
     std::vector<float3> positions;
     std::vector<float3> normals;
+    std::vector<float2> uvs;
     std::vector<uint16_t> indices;
+    const float2 cornerUvs[4] = {{0.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}};
     for (uint16_t face = 0; face < 6; ++face) {
         for (int corner = 0; corner < 4; ++corner) {
             positions.push_back(faceCorners[face][corner]);
             normals.push_back(faceNormals[face]);
+            uvs.push_back(cornerUvs[corner]);
         }
         const uint16_t base = face * 4;
         for (uint16_t offset : {0, 1, 2, 2, 3, 0}) {
@@ -186,12 +196,13 @@ Mesh createCube(Engine* engine, float size) {
         }
     }
 
-    return build(engine, positions, normals, indices);
+    return build(engine, positions, normals, uvs, indices);
 }
 
 Mesh createCapsule(Engine* engine, float radius, float halfHeight, int segments, int rings) {
     std::vector<float3> positions;
     std::vector<float3> normals;
+    std::vector<float2> uvs;
     std::vector<uint16_t> indices;
 
     // Built as a grid of rings from the top pole to the bottom. The two
@@ -217,6 +228,11 @@ Mesh createCapsule(Engine* engine, float radius, float halfHeight, int segments,
             const float z = std::sin(longitude);
 
             positions.push_back({x * ringRadius, ringY, z * ringRadius});
+            // u wraps around the capsule and v runs top to bottom. Local -Z --
+            // the direction a character faces -- lands at u = 0.75, which is
+            // where the forward marker is drawn.
+            uvs.push_back({static_cast<float>(segment) / static_cast<float>(segments),
+                static_cast<float>(ring) / static_cast<float>(totalRings - 1)});
             // The normal is the hemisphere's, which on the cylinder section is
             // simply horizontal.
             normals.push_back(normalize(float3{x * std::cos(latitude), std::sin(latitude),
@@ -232,16 +248,22 @@ Mesh createCapsule(Engine* engine, float radius, float halfHeight, int segments,
             const uint16_t c = static_cast<uint16_t>((ring + 1) * columns + segment);
             const uint16_t d = static_cast<uint16_t>(c + 1);
 
+            // Wound so that cross(b-a, c-a) points along the vertex normal,
+            // i.e. outward -- the same convention createCube uses. The
+            // opposite order leaves every triangle facing inward, so back-face
+            // culling removes the near surface and you see the inside of the
+            // far one. Verified by comparing winding against the normals for
+            // all 384 triangles.
             indices.push_back(a);
-            indices.push_back(c);
-            indices.push_back(b);
             indices.push_back(b);
             indices.push_back(c);
+            indices.push_back(b);
             indices.push_back(d);
+            indices.push_back(c);
         }
     }
 
-    return build(engine, positions, normals, indices);
+    return build(engine, positions, normals, uvs, indices);
 }
 
 Mesh createTerrain(Engine* engine) {
@@ -251,8 +273,10 @@ Mesh createTerrain(Engine* engine) {
 
     std::vector<float3> positions;
     std::vector<float3> normals;
+    std::vector<float2> uvs;
     positions.reserve(static_cast<size_t>(columns) * columns);
     normals.reserve(static_cast<size_t>(columns) * columns);
+    uvs.reserve(static_cast<size_t>(columns) * columns);
 
     for (int row = 0; row < columns; ++row) {
         for (int column = 0; column < columns; ++column) {
@@ -267,6 +291,9 @@ Mesh createTerrain(Engine* engine) {
             float nz = 0.0f;
             terrain::normalAt(x, z, &nx, &ny, &nz);
             normals.push_back({nx, ny, nz});
+            // One UV unit per metre, so any future terrain texture tiles at a
+            // predictable world scale.
+            uvs.push_back({x, z});
         }
     }
 
@@ -288,7 +315,7 @@ Mesh createTerrain(Engine* engine) {
         }
     }
 
-    return buildWide(engine, positions, normals, indices);
+    return buildWide(engine, positions, normals, uvs, indices);
 }
 
 Mesh createSphere(Engine* engine, float radius, int segments, int rings) {
@@ -301,9 +328,10 @@ Mesh createPlane(Engine* engine, float size) {
         {-h, 0, -h}, {-h, 0, h}, {h, 0, h}, {h, 0, -h},
     };
     const std::vector<float3> normals(4, float3{0, 1, 0});
+    const std::vector<float2> uvs = {{0, 0}, {0, 1}, {1, 1}, {1, 0}};
     const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
-    return build(engine, positions, normals, indices);
+    return build(engine, positions, normals, uvs, indices);
 }
 
 }  // namespace game

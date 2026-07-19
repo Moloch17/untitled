@@ -4,6 +4,10 @@
 
 namespace gamesim {
 
+namespace {
+constexpr float kPi = 3.14159265358979323846f;
+}  // namespace
+
 void stepCharacter(Character& character, const CharacterInput& input, float deltaSeconds) {
     // --- Horizontal: velocity follows intent directly ----------------------
     // No acceleration curve and no friction: a character that keeps sliding
@@ -42,6 +46,19 @@ void stepCharacter(Character& character, const CharacterInput& input, float delt
         if (character.velocity.y < kTerminalVelocity) {
             character.velocity.y = kTerminalVelocity;
         }
+    }
+
+    // --- Turn toward the direction of travel --------------------------------
+    // Facing follows movement, not the camera. Input yaw still decides *where*
+    // the character goes, so movement stays camera-relative; this only decides
+    // which way the body points once it is going somewhere.
+    const float horizontalSpeed = std::sqrt(character.velocity.x * character.velocity.x
+            + character.velocity.z * character.velocity.z);
+    if (horizontalSpeed > kFacingSpeedThreshold) {
+        // Snapped, not eased. The body points exactly along its travel
+        // direction; the mouse never rotates it directly, it only changes where
+        // "forward" is for the next tick of movement.
+        character.facingYaw = std::atan2(character.velocity.x, -character.velocity.z);
     }
 
     // --- Move the transform ------------------------------------------------

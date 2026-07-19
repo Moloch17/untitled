@@ -126,10 +126,10 @@ void Simulation::buildSnapshot(net::Snapshot* out) const {
         state.id = player.entityId;
         state.type = static_cast<uint8_t>(net::EntityType::Player);
         state.position = {position.x, position.y, position.z};
-        // The capsule's physical rotation is locked upright, so the visible
-        // facing comes from the player's own yaw.
-        state.rotation = {0.0f, std::sin(player.input.yaw * 0.5f), 0.0f,
-            std::cos(player.input.yaw * 0.5f)};
+        // The body's own facing, which follows movement rather than the
+        // camera -- looking around while standing still must not spin it.
+        const float facing = player.character.facingYaw;
+        state.rotation = {0.0f, std::sin(facing * 0.5f), 0.0f, std::cos(facing * 0.5f)};
         state.velocity = {velocity.x, velocity.y, velocity.z};
         // The acknowledgement the client reconciles against.
         state.lastInputSequence = player.lastInputSequence;

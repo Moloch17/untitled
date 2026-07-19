@@ -55,6 +55,7 @@ private:
     utils::Entity mMoonDisc;
     filament::MaterialInstance* mUnlitMaterial = nullptr;
     filament::Material* mUnlitBase = nullptr;
+    filament::Material* mCharacterBase = nullptr;
     filament::MaterialInstance* mSunMaterial = nullptr;
     filament::MaterialInstance* mMoonMaterial = nullptr;
     Mesh mDiscMesh;

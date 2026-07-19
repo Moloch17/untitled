@@ -158,6 +158,10 @@ void DemoScene::build(Engine* engine, Scene* scene) {
 
     // Sun and moon bodies. Unlit, because they are the light: shading them by
     // the scene's own lighting would black the sun out at dusk.
+    mCharacterBase = Material::Builder()
+            .package(CLIENTMATERIALS_CHARACTER_DATA, CLIENTMATERIALS_CHARACTER_SIZE)
+            .build(*engine);
+
     mUnlitBase = Material::Builder()
             .package(CLIENTMATERIALS_UNLIT_DATA, CLIENTMATERIALS_UNLIT_SIZE)
             .build(*engine);
@@ -254,14 +258,16 @@ void DemoScene::setPlayerTransform(Engine* engine, Scene* scene, uint32_t entity
     auto it = mPlayers.find(entityId);
     if (it == mPlayers.end()) {
         PlayerVisual visual;
-        visual.material = mMaterial->createInstance();
-        // The local player is tinted differently so it's obvious which capsule
-        // the camera is following.
-        const float3 colour = isLocalPlayer ? float3{0.25f, 0.55f, 0.85f}
-                                            : float3{0.85f, 0.75f, 0.30f};
-        visual.material->setParameter("baseColor", RgbType::LINEAR, colour);
-        visual.material->setParameter("roughness", 0.55f);
-        visual.material->setParameter("metallic", 0.0f);
+        visual.material = mCharacterBase->createInstance();
+        // Checker in two tones of the player's colour, so rotation is readable,
+        // with a contrasting plus marking the forward face. The local player is
+        // tinted differently so it's obvious which capsule the camera follows.
+        const float3 light = isLocalPlayer ? float3{0.30f, 0.55f, 0.85f}
+                                           : float3{0.85f, 0.72f, 0.25f};
+        const float3 dark = light * 0.35f;
+        visual.material->setParameter("colorA", RgbType::LINEAR, light);
+        visual.material->setParameter("colorB", RgbType::LINEAR, dark);
+        visual.material->setParameter("markColor", RgbType::LINEAR, float3{0.95f, 0.95f, 0.95f});
 
         visual.entity = utils::EntityManager::get().create();
         RenderableManager::Builder(1)
@@ -328,6 +334,7 @@ void DemoScene::destroy(Engine* engine, Scene* scene) {
     engine->destroy(mMoonMaterial);
     engine->destroy(mMaterial);
     engine->destroy(mUnlitBase);
+    engine->destroy(mCharacterBase);
 
     mPlaneMaterial = nullptr;
     mCubeMaterial = nullptr;
