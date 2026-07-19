@@ -8,6 +8,10 @@
 services:
   postgres:
     image: postgres:18-alpine
+    # Not attached: `docker compose up` gives its terminal to the world server
+    # so you can type commands into it. Use `docker compose logs postgres` to
+    # see this one.
+    attach: false
     environment:
       POSTGRES_DB: untitled
       POSTGRES_USER: untitled
@@ -30,6 +34,7 @@ services:
       retries: 30
 
   dbserver:
+    attach: false
     build:
       context: .
       dockerfile: docker/server.Dockerfile
@@ -49,6 +54,7 @@ services:
         condition: service_healthy
 
   authserver:
+    attach: false
     image: untitled-server-runtime
     command: /srv/bin/authserver
     environment:
@@ -73,6 +79,10 @@ services:
   worldserver:
     image: untitled-server-runtime
     command: /srv/bin/worldserver
+    # Keeps stdin open and gives it a terminal, so `docker compose up` lands you
+    # at the world server's console.
+    stdin_open: true
+    tty: true
     environment:
       WORLD_SERVER_PORT: "7002"
       WORLD_UDP_PORT: "7003"

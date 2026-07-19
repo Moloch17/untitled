@@ -9,6 +9,7 @@
 #include <chrono>
 #include <csignal>
 #include <deque>
+#include <sstream>
 #include <cstring>
 #include <map>
 #include <string>
@@ -24,6 +25,9 @@
 #include <serverutil/log.h>
 #include <serverutil/tcp_server.h>
 
+#include <sodium.h>
+
+#include "console.h"
 #include "simulation.h"
 
 using namespace net;
@@ -163,6 +167,11 @@ int main() {
         timeSpeed = 86400.0f / static_cast<float>(dayLength);
     } else if (const char* value = std::getenv("TIME_SPEED")) {
         timeSpeed = static_cast<float>(std::atof(value));
+    }
+
+    if (sodium_init() < 0) {
+        gLog.error("failed to initialise libsodium");
+        return 1;
     }
 
     world::Simulation simulation;
@@ -413,6 +422,203 @@ int main() {
         }
     };
 
+    // ---------------------------------------------------------------------
+    // Console on stdin.
+    //
+    // `docker compose up` attaches its terminal to this service, so commands
+    // can be typed straight at the running world.
+    //
+    // Commands typed here need no account: reaching this stdin already means
+    // control of the server process, so asking it to authenticate would guard
+    // nothing. Remote administration is a different matter and still goes
+    // through an account and its permission level -- see the TCP admin
+    // handlers above.
+    // ---------------------------------------------------------------------
+    world::ConsoleInput consoleInput;
+    consoleInput.start();
+
+    // Actions from here are attributed to the terminal in the log.
+    const char* const kConsoleActor = "console";
+
+    const auto prompt = []() {
+        std::printf("> ");
+        std::fflush(stdout);
+    };
+
+    const auto consoleHelp = []() {
+        std::printf(
+                "  account create <name> <pass> [lvl] create an account\n"
+                "  account delete <name>              delete an account\n"
+                "  account level <name> <0|1|2>       0 player, 1 gm, 2 admin\n"
+                "  time                               show the world clock\n"
+                "  time set <HH:MM>                   set the clock (24 hour)\n"
+                "  time speed <multiplier>            1 = real time, 24 = 1 hour day\n"
+                "  time reset                         real time, at the real time\n"
+                "  latency set <milliseconds>         simulated lag, 0 turns it off\n"
+                "  status                             clock, players, tick, latency\n"
+                "  help\n");
+    };
+
+    const auto printStatus = [&]() {
+        const float timeOfDay = simulation.timeOfDay();
+        const int minutes = static_cast<int>(timeOfDay * 24.0f * 60.0f + 0.5f) % (24 * 60);
+        std::printf("  world clock %02d:%02d at %.4gx real time\n", minutes / 60, minutes % 60,
+                simulation.timeSpeed());
+        std::printf("  players online %zu, tick %u, simulated latency %u ms\n",
+                simulation.playerCount(), simulation.tick(), simulatedLatencyMs);
+    };
+
+    std::printf("world server console -- 'help' for commands\n");
+    prompt();
+
+    const auto runConsoleCommand = [&](const std::string& line) {
+        std::vector<std::string> words;
+        {
+            std::string word;
+            std::istringstream stream(line);
+            while (stream >> word) {
+                words.push_back(word);
+            }
+        }
+        if (words.empty()) {
+            prompt();
+            return;
+        }
+
+        const std::string& command = words[0];
+        if (command == "help" || command == "?") {
+            consoleHelp();
+            prompt();
+            return;
+        }
+        if (command == "status") {
+            printStatus();
+        } else if (command == "time" || command == "latency") {
+            if (command == "latency") {
+                if (words.size() >= 3 && words[1] == "set") {
+                    simulatedLatencyMs = std::min(
+                            static_cast<uint32_t>(std::atoi(words[2].c_str())), 2000u);
+                    gLog.info("%s set simulated latency to %u ms", kConsoleActor,
+                            simulatedLatencyMs);
+                    std::printf("  simulated latency %u ms each way (~%u ms round trip)\n",
+                            simulatedLatencyMs, simulatedLatencyMs * 2);
+                } else {
+                    std::printf("  usage: latency set <milliseconds>\n");
+                }
+            } else if (words.size() == 1) {
+                printStatus();
+            } else if (words[1] == "reset") {
+                simulation.resetClock();
+                gLog.info("%s reset the world clock", kConsoleActor);
+                printStatus();
+            } else if (words[1] == "set" && words.size() >= 3) {
+                const std::string& text = words[2];
+                const size_t colon = text.find(':');
+                if (colon == std::string::npos) {
+                    std::printf("  expected HH:MM in 24 hour form\n");
+                } else {
+                    const int hours = std::atoi(text.substr(0, colon).c_str());
+                    const int mins = std::atoi(text.substr(colon + 1).c_str());
+                    if (hours < 0 || hours > 23 || mins < 0 || mins > 59) {
+                        std::printf("  expected HH:MM in 24 hour form\n");
+                    } else {
+                        simulation.setTimeOfDay(
+                                static_cast<float>(hours * 60 + mins) / (24.0f * 60.0f));
+                        gLog.info("%s set the world clock to %02d:%02d", kConsoleActor, hours,
+                                mins);
+                        printStatus();
+                    }
+                }
+            } else if (words[1] == "speed" && words.size() >= 3) {
+                const float speed = std::clamp(
+                        static_cast<float>(std::atof(words[2].c_str())), 0.0f, 20000.0f);
+                simulation.setTimeSpeed(speed);
+                gLog.info("%s set the world clock to %.4gx real time", kConsoleActor, speed);
+                printStatus();
+            } else {
+                std::printf("  usage: time | time set <HH:MM> | time speed <x> | time reset\n");
+            }
+        } else if (command == "account") {
+            const std::string actor = kConsoleActor;
+            if (words.size() >= 4 && words[1] == "create") {
+                // What bootstrap creates is always an admin; that is its point.
+                const uint8_t level = words.size() >= 5
+                        ? static_cast<uint8_t>(std::atoi(words[4].c_str()))
+                        : 0;
+                char hashed[crypto_pwhash_STRBYTES];
+                if (words[3].size() < 6
+                        || crypto_pwhash_str(hashed, words[3].c_str(), words[3].size(),
+                                   crypto_pwhash_OPSLIMIT_INTERACTIVE,
+                                   crypto_pwhash_MEMLIMIT_INTERACTIVE)
+                                != 0) {
+                    std::printf("  password too short, or hashing failed\n");
+                    prompt();
+                    return;
+                }
+                const std::string name = words[1 + 1];
+                dbClient.createAccountWithLevel(name, hashed, level,
+                        [name, level, actor, prompt](bool ok, DbResult result, uint64_t) {
+                            if (!ok || result == DbResult::Error) {
+                                std::printf("  failed\n");
+                            } else if (result == DbResult::Conflict) {
+                                std::printf("  account '%s' already exists\n", name.c_str());
+                            } else {
+                                gLog.info("%s created account '%s' at level %u", actor.c_str(),
+                                        name.c_str(), level);
+                                std::printf("  created account '%s' at level %u\n",
+                                        name.c_str(), level);
+                            }
+                            prompt();
+                        });
+                return;
+            }
+            if (words.size() >= 3 && words[1] == "delete") {
+                const std::string name = words[2];
+                dbClient.deleteAccount(name, [name, actor, prompt](bool ok, DbResult result) {
+                    if (!ok) {
+                        std::printf("  failed\n");
+                    } else if (result == DbResult::NotFound) {
+                        std::printf("  no such account\n");
+                    } else {
+                        gLog.info("%s deleted account '%s'", actor.c_str(), name.c_str());
+                        std::printf("  deleted account '%s'\n", name.c_str());
+                    }
+                    prompt();
+                });
+                return;
+            }
+            if (words.size() >= 4 && words[1] == "level") {
+                const std::string name = words[2];
+                const uint8_t level = static_cast<uint8_t>(std::atoi(words[3].c_str()));
+                if (level > static_cast<uint8_t>(PermissionLevel::Admin)) {
+                    std::printf("  level must be 0, 1 or 2\n");
+                    prompt();
+                    return;
+                }
+                dbClient.setPermissionLevel(name, level,
+                        [name, level, actor, prompt](bool ok, DbResult result) {
+                            if (!ok) {
+                                std::printf("  failed\n");
+                            } else if (result == DbResult::NotFound) {
+                                std::printf("  no such account\n");
+                            } else {
+                                gLog.info("%s set '%s' to level %u", actor.c_str(), name.c_str(),
+                                        level);
+                                std::printf("  '%s' is now level %u\n", name.c_str(), level);
+                            }
+                            prompt();
+                        });
+                return;
+            }
+            std::printf("  usage: account create <name> <password> [level]\n"
+                        "         account delete <name>\n"
+                        "         account level <name> <0|1|2>\n");
+        } else {
+            std::printf("  unknown command '%s' -- try 'help'\n", command.c_str());
+        }
+        prompt();
+    };
+
     // Fixed-timestep loop. Snapshot sends are driven by the accumulator rather
     // than by how long the previous frame took, so the tick rate stays honest.
     const double tickSeconds = 1.0 / kServerTickHz;
@@ -427,6 +633,16 @@ int main() {
             gLog.warn("lost connection to database server, reconnecting");
             while (gRunning && !dbClient.connect(dbHost, dbPort)) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+
+        // Console commands typed at the terminal. Parsing happens here, on the
+        // world's own thread, so nothing it touches needs locking; the reader
+        // thread only ever hands over strings.
+        {
+            std::string line;
+            while (consoleInput.next(&line)) {
+                runConsoleCommand(line);
             }
         }
 

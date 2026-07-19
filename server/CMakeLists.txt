@@ -53,8 +53,10 @@ target_link_libraries(dbserver PRIVATE serverutil PostgreSQL::PostgreSQL)
 add_executable(worldserver
     worldserver/src/main.cpp
     worldserver/src/simulation.cpp
+    worldserver/src/console.cpp
 )
-target_link_libraries(worldserver PRIVATE serverutil gamesim)
+# libsodium here too: the console can create accounts, which means hashing.
+target_link_libraries(worldserver PRIVATE serverutil gamesim ${SODIUM_TARGET})
 
 add_executable(authserver authserver/src/main.cpp)
 target_link_libraries(authserver PRIVATE serverutil ${SODIUM_TARGET})
