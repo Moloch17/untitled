@@ -20,12 +20,6 @@ constexpr int kServerTickHz = 60;
 // What an account is allowed to do. Every privileged action is authorised
 // against the level on the account behind the caller's session, so there is no
 // shared secret to leak, and every action is attributable to a person.
-// Seeded on a fresh database so the first real admin can be created, then
-// deleted as soon as one exists. It is admin-level but deliberately crippled:
-// the servers allow it exactly one command, `account create`.
-constexpr const char* kBootstrapAccount = "bootstrap";
-constexpr const char* kBootstrapPassword = "admin";
-
 enum class PermissionLevel : uint8_t {
     Player = 0,
     GameMaster = 1,
@@ -96,7 +90,7 @@ enum class DbMessage : uint16_t {
     AccountSetLevelRequest = 112,   // {requestId:u32, username:str, level:u8}
     AccountSetLevelResponse = 113,  // {requestId:u32, result:u8}
     AccountCreateWithLevelRequest = 114,  // {requestId:u32, username:str, hash:str, level:u8}
-    AdminExistsRequest = 115,   // {requestId:u32, excluding:str}
+    AdminExistsRequest = 115,   // {requestId:u32}
     AdminExistsResponse = 116,  // {requestId:u32, exists:u8}
 };
 

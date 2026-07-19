@@ -224,8 +224,7 @@ void DbClient::setPermissionLevel(const std::string& username, uint8_t level,
             });
 }
 
-void DbClient::adminExists(const std::string& excluding,
-        std::function<void(bool, bool)> callback) {
+void DbClient::adminExists(std::function<void(bool, bool)> callback) {
     if (!mConnected) {
         callback(false, false);
         return;
@@ -234,7 +233,6 @@ void DbClient::adminExists(const std::string& excluding,
     std::vector<uint8_t> payload;
     ByteWriter writer(payload);
     writer.u32(requestId);
-    writer.string(excluding);
     mStream->send(static_cast<uint16_t>(DbMessage::AdminExistsRequest), payload);
 
     registerHandler(requestId,

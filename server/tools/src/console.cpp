@@ -87,7 +87,6 @@ bool request(const std::string& host, uint16_t port, uint16_t type,
 }
 
 bool login();
-void deleteBootstrapAccount();
 
 void accountCreate(const std::string& name, const std::string& password, uint8_t level) {
     std::vector<uint8_t> payload;
@@ -109,43 +108,6 @@ void accountCreate(const std::string& name, const std::string& password, uint8_t
         return;
     }
     std::printf("  created account '%s'\n", name.c_str());
-
-    // Signed in as the bootstrap account, creating an account is the one thing
-    // it can do -- and having done it, it has no further purpose. Switch to the
-    // new admin and remove it, so a well-known password never outlives the
-    // setup it existed for.
-    if (gUser == kBootstrapAccount) {
-        gUser = name;
-        gPassword = password;
-        if (!login()) {
-            std::printf("  could not sign in as '%s'; the bootstrap account is still\n"
-                        "  present, so you can try again.\n", name.c_str());
-            return;
-        }
-        deleteBootstrapAccount();
-    }
-}
-
-// Removes the bootstrap account once a real admin has taken over. No prompt:
-// this is the tail end of the flow the operator already asked for.
-void deleteBootstrapAccount() {
-    std::vector<uint8_t> payload;
-    ByteWriter writer(payload);
-    writer.string(gToken);
-    writer.string(kBootstrapAccount);
-
-    MessageStream::Message reply;
-    if (!request(gAuthHost, gAuthPort,
-                static_cast<uint16_t>(AuthMessage::AdminAccountDeleteRequest), payload, &reply)) {
-        return;
-    }
-    ByteReader reader(reply.payload.data(), reply.payload.size());
-    const auto result = static_cast<AuthResult>(reader.u8());
-    if (result == AuthResult::Success) {
-        std::printf("  removed the '%s' account\n", kBootstrapAccount);
-    } else {
-        std::printf("  could not remove '%s': %s\n", kBootstrapAccount, toString(result));
-    }
 }
 
 void accountDelete(const std::string& name, bool assumeYes) {

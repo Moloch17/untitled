@@ -103,16 +103,13 @@ bool Database::setPermissionLevel(const std::string& username, uint8_t level, bo
     return true;
 }
 
-bool Database::hasAdminExcluding(const std::string& excluding, bool* exists) {
+bool Database::hasAdmin(bool* exists) {
     *exists = false;
     if (!ensureConnected()) {
         return false;
     }
-    const char* values[] = {excluding.c_str()};
-    const Result result(PQexecParams(mConnection,
-            "SELECT 1 FROM accounts WHERE permission_level >= 2 "
-            "AND lower(username) <> lower($1) LIMIT 1",
-            1, nullptr, values, nullptr, nullptr, 0));
+    const Result result(PQexec(mConnection,
+            "SELECT 1 FROM accounts WHERE permission_level >= 2 LIMIT 1"));
     if (result.status() != PGRES_TUPLES_OK) {
         mLastError = PQerrorMessage(mConnection);
         return false;

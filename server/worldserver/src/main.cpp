@@ -305,9 +305,8 @@ int main() {
                                 reply(1);
                                 return;
                             }
-                            if (session.username == kBootstrapAccount
-                                    || session.permissionLevel
-                                            < static_cast<uint8_t>(PermissionLevel::GameMaster)) {
+                            if (session.permissionLevel
+                                    < static_cast<uint8_t>(PermissionLevel::GameMaster)) {
                                 reply(2);
                                 return;
                             }
@@ -363,13 +362,6 @@ int main() {
                                 const serverutil::DbClient::SessionLookup& session) {
                             if (!ok || !session.found) {
                                 reply(1);
-                                return;
-                            }
-                            // The bootstrap account is admin-level but exists
-                            // only to create the first real admin.
-                            if (session.username == kBootstrapAccount) {
-                                gLog.warn("the bootstrap account may only create an account");
-                                reply(2);
                                 return;
                             }
                             if (session.permissionLevel
@@ -541,7 +533,7 @@ int main() {
         } else if (command == "account") {
             const std::string actor = kConsoleActor;
             if (words.size() >= 4 && words[1] == "create") {
-                // What bootstrap creates is always an admin; that is its point.
+                // Level defaults to player unless one is given.
                 const uint8_t level = words.size() >= 5
                         ? static_cast<uint8_t>(std::atoi(words[4].c_str()))
                         : 0;

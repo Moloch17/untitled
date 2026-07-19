@@ -85,46 +85,41 @@ tools `admin`, `authcli`, `worldcli`.
 
 ### 1. Start the servers
 
-The servers need a PostgreSQL database. The quickest way to get one, plus all
-three servers, is Docker:
+The servers need a PostgreSQL database. Docker brings up that and all three
+servers:
 
-    docker compose up -d
+    docker compose up
 
-Wait a few seconds for the database to report healthy:
-
-    docker compose ps
+Your terminal is attached to the world server, which offers a console prompt.
+The other services run alongside it but their output is kept out of the way;
+see them with `docker compose logs dbserver` and so on. Use `docker compose up
+-d` if you would rather not have the prompt.
 
 On the very first run this creates the database and applies
-`server/sql/schema.sql`, which lives in `data/postgres` on the host. That
-directory is **not** in the repository, so a fresh clone always starts with an
-empty database and no accounts -- you cannot log in until you create one.
+`server/sql/schema.sql`. The data lives in `data/postgres` on the host, which is
+**not** in the repository, so a fresh clone always starts with an empty database
+and no accounts.
 
-Rebuilt a server? A running container keeps using the binary it started with,
-so restart it to pick up the new one:
+Rebuilt a server? A running container keeps using the binary it started with, so
+restart it to pick up the new one:
 
     docker compose restart dbserver authserver worldserver
 
 ### 2. Create an account
 
-Account management goes through the `admin` tool, which authenticates with a
-shared secret that must match the auth server's. Compose sets it to
-`change-me-in-dot-env` unless you override it:
+At the world server console:
 
-    export ADMIN_SECRET=change-me-in-dot-env
-    ./build/bin/admin account create <name> <password>
+    > account create yourname yourpassword 2
 
-To use your own secret and database password, create a `.env` file next to
-`compose.yaml` -- Compose reads it automatically:
+The trailing number is the permission level: 0 player, 1 game master, 2 admin.
+Leave it off for an ordinary player account.
 
-    ADMIN_SECRET=something-private
-    POSTGRES_PASSWORD=something-private
-
-then `docker compose up -d` again, and export the same `ADMIN_SECRET` in the
-shell you run `admin` from.
-
-Deleting an account asks for confirmation and takes its sessions with it:
-
-    ./build/bin/admin account delete <name>
+Commands typed at this console need no account of their own. Reaching the
+server's stdin already means control of the process, so asking it to
+authenticate would guard nothing. It is also the *only* way to create the first
+account -- there is no network path to it and no seeded account with a known
+password. A database with no admin says so in the auth server's log and points
+at this command.
 
 ### 3. Run the client
 
@@ -140,6 +135,44 @@ with the account from step 2. To point it at a server elsewhere:
 
 If the servers aren't running, the login screen reports `cannot reach auth
 server` rather than failing silently.
+
+## The server console
+
+Typed at the world server (`docker compose up`), or remotely with
+`./build/bin/console`:
+
+    account create <name> <password> [level]   0 player, 1 gm, 2 admin
+    account delete <name>
+    account level <name> <0|1|2>
+    time                                       show the world clock
+    time set <HH:MM>                           set the clock (24 hour)
+    time speed <multiplier>                    1 = real time, 24 = 1 hour day
+    time reset                                 real time, at the real time
+    latency set <milliseconds>                 simulated lag, 0 turns it off
+    status                                     clock, players, tick, latency
+    help
+
+`time speed` multiplies how fast the world clock runs; changing it never makes
+the clock jump, because the new rate applies from the moment it is set.
+`latency set` delays packets in both directions on the world server, so 150 is
+roughly a 300ms round trip for everyone connected, capped at 2000.
+
+### Administering from another machine
+
+The standalone console talks to the servers over TCP:
+
+    ./serve.sh                             # start the servers, then a prompt
+    ./build/bin/console                    # against servers already running
+    ./build/bin/console time set 20:30     # one command and exit
+
+Unlike the server's own stdin, this signs in with an account and every command
+is authorised against that account's permission level. Account management needs
+admin (2); the clock and latency need game master (1) or higher. The servers log
+which account performed each action, and refusals name the account refused.
+
+For scripting, `CONSOLE_USER` and `CONSOLE_PASSWORD` skip the prompt. Without a
+terminal and without those set, it exits rather than waiting on a prompt nobody
+can answer.
 
 ### Checking the servers without the client
 
@@ -158,7 +191,7 @@ a PostgreSQL you provide yourself, with `server/sql/schema.sql` already applied:
 
     PGHOST=localhost PGDATABASE=untitled PGUSER=untitled PGPASSWORD=... \
         ./build/bin/dbserver
-    DB_SERVER_HOST=localhost ADMIN_SECRET=... ./build/bin/authserver
+    DB_SERVER_HOST=localhost ./build/bin/authserver
     DB_SERVER_HOST=localhost ./build/bin/worldserver
 
 Ports default to 7000 (dbserver), 7001 (authserver) and 7002/7003 TCP/UDP
@@ -166,9 +199,9 @@ Ports default to 7000 (dbserver), 7001 (authserver) and 7002/7003 TCP/UDP
 
 The world clock follows the server's local wall-clock time, so in-game noon is
 real noon. Compose mounts `/etc/localtime` into the world server for that;
-without it a container runs on UTC. Set `DAY_LENGTH_SECONDS` to run an
-accelerated cycle instead (60 gives a one-minute day, which is what you want
-when working on the lighting). See `compose.yaml` for every variable.
+without it a container runs on UTC. `TIME_SPEED` (or `DAY_LENGTH_SECONDS`) sets
+an accelerated cycle from startup, which is what you want when working on the
+lighting. See `compose.yaml` for every variable.
 
 ## Updating dependencies
 

@@ -127,10 +127,8 @@ int main() {
             }
 
             case DbMessage::AdminExistsRequest: {
-                const std::string excluding = reader.string();
                 bool exists = false;
-                const bool ok = !reader.failed()
-                        && database.hasAdminExcluding(excluding, &exists);
+                const bool ok = database.hasAdmin(&exists);
                 writer.u32(requestId);
                 writer.u8(ok && exists ? 1 : 0);
                 server.send(id, static_cast<uint16_t>(DbMessage::AdminExistsResponse), payload);

@@ -48,10 +48,9 @@ public:
     // Sessions are removed with the account by the FK's ON DELETE CASCADE.
     bool deleteAccount(const std::string& username, bool* found);
     bool setPermissionLevel(const std::string& username, uint8_t level, bool* found);
-    // True if any account other than `excluding` has admin rights. The
-    // bootstrap account is itself an admin, so it has to be discounted when
-    // deciding whether a real one exists yet.
-    bool hasAdminExcluding(const std::string& excluding, bool* exists);
+    // True if any account has admin rights. Used only to warn an operator that
+    // a fresh database still needs its first admin.
+    bool hasAdmin(bool* exists);
 
     bool createSession(uint64_t accountId, const std::string& token, uint32_t ttlSeconds);
     bool lookupSession(const std::string& token, Session* out, bool* found);
